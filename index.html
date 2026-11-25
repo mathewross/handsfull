@@ -120,7 +120,7 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
 .form .wide{grid-column:1/-1}
 .note{font-size:13px;color:var(--mute)}
 .rev{border-top:1px solid var(--line);padding:10px 0;font-size:15px}
-.leaflet-container{font:inherit}
+.leaflet-container{font:inherit}.leaflet-control-attribution{font-size:10px;max-width:60vw;opacity:.8}
 @media(prefers-reduced-motion:no-preference){.card{transition:border-color .15s,transform .15s}.card:active{transform:scale(.99)}}
 </style>
 </head>
@@ -231,12 +231,19 @@ const Store = {
 const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const setStatus = t => { $('#status').textContent = t; };
 async function fetchOSM(c) {
+  const ck = `hf-osm:${c.lat.toFixed(3)},${c.lon.toFixed(3)},${S.radius},${S.walk}`;
+  try { const hit = JSON.parse(localStorage.getItem(ck)); if (hit && Date.now() - hit.t < 3 * 864e5) return hit.e; } catch {}
+  const elements = await fetchOSMLive(c);
+  try { Object.keys(localStorage).filter(k => k.startsWith('hf-osm:')).forEach(k => localStorage.removeItem(k)); const str = JSON.stringify({ t: Date.now(), e: elements }); if (str.length < 3.5e6) localStorage.setItem(ck, str); } catch {}
+  return elements;
+}
+async function fetchOSMLive(c) {
   // 1) venues in the search radius → set .v   2) cafés, toilets, park names and play kit only around those venues
   const lim = Math.round(S.walk * M_PER_MIN / DETOUR) + 50, a = `(around:${S.radius},${c.lat},${c.lon})`;
-  const q = `[out:json][timeout:90][maxsize:536870912];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};)->.v;.v out tags center qt;(nwr["amenity"="cafe"](around.v:${lim});nwr["amenity"="toilets"](around.v:${lim});nwr["toilets"="yes"](around.v:${lim});node["playground"~"^(sandpit|baby_swing|swing|springy|playhouse|slide)$"](around.v:60););out tags center qt;(nwr["leisure"~"^(park|garden|recreation_ground|common|nature_reserve|pitch)$"]["name"](around.v:150);nwr["landuse"~"^(recreation_ground|village_green|grass)$"]["name"](around.v:150);nwr["amenity"~"^(school|place_of_worship)$"]["name"](around.v:60);nwr["landuse"="residential"]["name"](around.v:50););out tags center bb qt;node["place"~"^(suburb|neighbourhood|quarter|village|town|hamlet)$"](around.v:3000);out tags qt;`;
+  const q = `[out:json][timeout:50][maxsize:67108864];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};)->.v;.v out tags center qt;(nwr["amenity"="cafe"](around.v:${lim});nwr["amenity"="toilets"](around.v:${lim});nwr["toilets"="yes"](around.v:${lim});node["playground"~"^(sandpit|baby_swing|swing|springy|playhouse|slide)$"](around.v:60););out tags center qt;(nwr["leisure"~"^(park|garden|recreation_ground|common|nature_reserve|pitch)$"]["name"](around.v:150);nwr["landuse"~"^(recreation_ground|village_green|grass)$"]["name"](around.v:150);nwr["amenity"~"^(school|place_of_worship)$"]["name"](around.v:60);nwr["landuse"="residential"]["name"](around.v:50););out tags center bb qt;node["place"~"^(suburb|neighbourhood|quarter|village|town|hamlet)$"](around.v:3000);out tags qt;`;
   let why = '';
   for (const url of MIRRORS) {
-    const host = new URL(url).hostname, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 100000);
+    const host = new URL(url).hostname, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 60000);
     try {
       const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
       if (!r.ok) throw new Error(r.status === 429 ? 'too many requests' : r.status >= 500 ? 'server overloaded' : 'error ' + r.status);
@@ -339,19 +346,26 @@ function initMap() {
   if (!window.L) { $('#mapPane').innerHTML = '<p class="empty">The map could not load. The list still works.</p>'; return; }
   map = L.map('map', { preferCanvas: true }).setView([51.505, -0.12], 12);
   const osm = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', carto = osm + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  const esri = (svc, maxZoom = 19) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`, { maxZoom, maxNativeZoom: maxZoom, attribution: 'Tiles &copy; Esri' });
+  // All keyless. CARTO now needs an API key, so it's gone.
   const STYLES = {
-    'Soft colour': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
-    'Light': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
-    'Dark': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
-    'Detailed (OSM)': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: osm }),
-    'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' })
+    'Standard': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: osm }),
+    'Soft colour': L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abc', attribution: osm + ', style HOT / OSM France' }),
+    'Street map': esri('World_Street_Map'),
+    'Light': L.layerGroup([esri('Canvas/World_Light_Gray_Base', 16), esri('Canvas/World_Light_Gray_Reference', 16)]),
+    'Dark': L.layerGroup([esri('Canvas/World_Dark_Gray_Base', 16), esri('Canvas/World_Dark_Gray_Reference', 16)]),
+    'Satellite': esri('World_Imagery')
   };
+  // if a style's tiles keep failing, fall back to the standard map
+  let fails = 0;
+  Object.entries(STYLES).forEach(([name, l]) => { if (name === 'Standard') return; (l.eachLayer ? (f => l.eachLayer(f)) : (f => f(l)))(t => t.on('tileerror', () => { if (++fails === 6 && map.hasLayer(l)) { map.removeLayer(l); STYLES.Standard.addTo(map); LS.set('hf-style', 'Standard'); } })); });
+  map.on('baselayerchange', () => { fails = 0; });
   const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
   const saved = LS.get('hf-style', null);
-  (STYLES[saved] || STYLES[dark ? 'Dark' : 'Soft colour']).addTo(map);
+  (STYLES[saved] || STYLES[dark ? 'Dark' : 'Standard']).addTo(map);
   L.control.layers(STYLES, null, { position: 'topright' }).addTo(map);
   map.on('baselayerchange', e => LS.set('hf-style', e.name));
-  map.attributionControl.setPosition('topright');
+  map.attributionControl.setPosition('topright'); map.attributionControl.setPrefix(false);
   map.on('dragstart', () => { if (mq.matches && S.snap === 'half') setSnap('peek'); });
   layer = L.layerGroup().addTo(map);
 }
