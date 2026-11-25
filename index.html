@@ -38,6 +38,7 @@ button{cursor:pointer}
 .opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px}
 .opts select{min-height:40px;border-radius:10px;border:0;padding:0 8px;background:rgba(255,255,255,.14);color:#fff}
 .opts select option{color:#14271f}
+.ver{order:9;width:100%;font-size:12px;opacity:.7}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{flex:none}
 .chip{min-height:40px;border-radius:99px;padding:0 14px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;font-weight:700;font-size:14px}
@@ -94,6 +95,7 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .stars{color:var(--coral);font-weight:800;font-size:14px}
 .empty{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:22px;text-align:center;color:var(--mute)}
 .empty h2{color:var(--ink);font-size:26px;margin-bottom:6px}
+.start{display:grid;gap:10px}.start p{margin:0 0 4px}
 .sheetWrap{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:1000}
 .sheetWrap[hidden]{display:none}
 .sheet{background:var(--bg);width:min(720px,100%);max-height:92dvh;overflow:auto;border-radius:20px 20px 0 0;padding:20px max(4vw,16px) 32px}
@@ -143,6 +145,7 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
       <button class="btn ghost" type="button" id="optBtn" aria-label="Options" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
     </div>
     <div class="opts">
+      <span class="ver">Version 2026-11-25 16:05</span>
       <label>Within <select id="radius"><option value="2000">2 km</option><option value="5000">5 km</option><option value="10000">10 km</option><option value="15000" selected>15 km</option><option value="20000">20 km</option></select></label>
       <label>Café/toilet within <select id="walk"><option value="5">5 min walk</option><option value="8" selected>8 min walk</option><option value="12">12 min walk</option></select></label>
       <label>Sort <select id="sort"><option value="best">Best match</option><option value="near">Nearest</option></select></label>
@@ -346,7 +349,11 @@ const visible = () => { const v = S.places.filter(p => S.filter === 'all' ? true
 
 function renderList() {
   const list = visible(), ul = $('#list');
-  if (!S.center) { ul.innerHTML = `<li class="empty"><h2>Where are you heading?</h2>Search a town or postcode, or tap <b>Near me</b>. Each place gets three checks: a café to sit and feed, a toilet for the toddler, and play they can mostly manage alone.</li>`; $('#status').textContent = ''; return; }
+  if (!S.center) {
+    ul.innerHTML = `<li class="empty start"><h2>Where are you?</h2><p>We’ll find playgrounds, soft plays and groups nearby, each checked for a café to sit and feed, a toilet for the toddler, and play they can mostly manage alone.</p>
+      <button class="btn" type="button" data-locate>Use my location</button><button class="btn plain" type="button" data-typeplace>Type a town or postcode</button></li>`;
+    $('#status').textContent = ''; return;
+  }
   $('#status').innerHTML = `<b>${list.length.toLocaleString()} place${list.length === 1 ? '' : 's'}</b><span class="sub"> · ${S.sort === 'near' ? 'nearest' : 'best matches'} first · data from OpenStreetMap</span>`;
   ul.innerHTML = list.length ? list.slice(0, S.shown).map(p => { const a = avg(S.ratings[p.id] || []); return `<li><button class="card" data-id="${esc(p.id)}"><span class="kind">${KIND[p.kind]}${p.area ? ' · ' + esc(p.area) : ''} · ${km(p.away)} away</span><h3>${esc(p.name)}</h3><span class="ticks">${ticks(p)}</span>${a ? `<span class="stars">★ ${a.toFixed(1)} from parents</span>` : ''}</button></li>`; }).join('') + (list.length > S.shown ? `<li><button class="btn plain" style="width:100%" data-more>Show ${Math.min(100, list.length - S.shown)} more of ${list.length - S.shown}</button></li>` : '')
     : '<li class="empty">Nothing matches this filter here. Try a bigger radius or a longer walk.</li>';
@@ -356,7 +363,7 @@ function renderList() {
 let map, layer, here;
 function initMap() {
   if (!window.L) { $('#mapPane').innerHTML = '<p class="empty">The map could not load. The list still works.</p>'; return; }
-  map = L.map('map', { preferCanvas: true }).setView([51.505, -0.12], 12);
+  map = L.map('map', { preferCanvas: true }).setView([54.3, -2.6], 5);
   const osm = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', carto = osm + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
   const esri = (svc, maxZoom = 19) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`, { maxZoom, maxNativeZoom: maxZoom, attribution: 'Tiles &copy; Esri' });
   // All keyless. CARTO now needs an API key, so it's gone.
@@ -537,13 +544,14 @@ const coverBottom = () => mq.matches ? pane.offsetHeight - curY() : 0; // px of 
 }
 
 $('#searchForm').addEventListener('submit', async e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; setStatus('Looking up ' + q + '…'); try { const g = await geocode(q); go(g.center, g.label); } catch (err) { $('#status').textContent = err.message; } });
-$('#locate').addEventListener('click', () => { if (!navigator.geolocation) { $('#status').textContent = 'Location isn’t available here — search instead.'; return; } $('#status').textContent = 'Finding you…'; navigator.geolocation.getCurrentPosition(p => go({ lat: p.coords.latitude, lon: p.coords.longitude }, 'you'), () => { $('#status').textContent = 'Location was blocked — search a town or postcode instead.'; }, { timeout: 10000 }); });
+function locate() { if (!navigator.geolocation) { $('#status').textContent = 'Location isn’t available here — search instead.'; return; } $('#status').textContent = 'Finding you…'; navigator.geolocation.getCurrentPosition(p => go({ lat: p.coords.latitude, lon: p.coords.longitude }, 'you'), () => { $('#status').textContent = 'Location was blocked — search a town or postcode instead.'; }, { timeout: 10000 }); }
+$('#locate').addEventListener('click', locate);
 $('#radius').addEventListener('change', e => { S.radius = +e.target.value; if (S.center) go(S.center, S.label); });
 $('#sort').addEventListener('change', e => { S.sort = e.target.value; S.shown = 100; renderList(); });
 $('#walk').addEventListener('change', e => { S.walk = +e.target.value; LS.set('hf-last', { ...LS.get('hf-last', {}), walk: S.walk }); if (S.els) rebuild(); });
 $('#filters').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; S.filter = b.dataset.f; S.shown = 100; S.fit = true; document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b)); renderList(); });
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.t)));
-$('#list').addEventListener('click', e => { if (e.target.closest('[data-more]')) { S.shown += 100; renderList(); return; } const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
+$('#list').addEventListener('click', e => { if (e.target.closest('[data-locate]')) { locate(); return; } if (e.target.closest('[data-typeplace]')) { $('#q').focus(); return; } if (e.target.closest('[data-more]')) { S.shown += 100; renderList(); return; } const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
 $('#sheetWrap').addEventListener('click', e => { if (e.target.id === 'sheetWrap' || e.target.closest('[data-close]')) closeSheet(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 $('#groupForm').addEventListener('submit', async e => {
@@ -557,7 +565,11 @@ initMap();
 setSnap('half', false);
 const last = LS.get('hf-last', null);
 if (last?.center) { S.radius = last.radius || 15000; S.walk = last.walk || 8; $('#radius').value = S.radius; $('#walk').value = S.walk; $('#q').value = last.label && last.label !== 'you' ? last.label : ''; go(last.center, last.label); }
-else { renderList(); renderGroups(); }
+else {
+  renderList(); renderGroups();
+  // already allowed location before? use it straight away; otherwise wait for the user to choose
+  try { navigator.permissions?.query({ name: 'geolocation' }).then(r => { if (r.state === 'granted' && !S.center) locate(); }).catch(() => {}); } catch {}
+}
 }
 </script>
 </body>
