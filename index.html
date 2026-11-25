@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hands Full</title>
+<meta name="description" content="Playgrounds, soft plays and groups that work when you're out with a toddler and a newborn.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito+Sans:wght@400;700;800&display=swap" rel="stylesheet">
+<!--
+  HANDS FULL — prototype
+  Data: OpenStreetMap via Overpass (venues, cafés, toilets, playground equipment), Nominatim (place search).
+  Reviews + community groups: saved in this browser by default.
+  To share them between all users, create a free Supabase project, run the SQL below, and fill CFG in the script.
+
+  create table reviews (id bigint generated always as identity primary key, place_id text not null,
+    overall int, solo int, feeding int, clean int, value int, buggy int, comment text,
+    created_at timestamptz default now());
+  create table groups (id bigint generated always as identity primary key, name text not null, kind text,
+    schedule text, place text, cost text, link text, source text, notes text, lat float8, lon float8,
+    created_at timestamptz default now());
+  alter table reviews enable row level security; alter table groups enable row level security;
+  create policy "read reviews" on reviews for select using (true);
+  create policy "add reviews" on reviews for insert with check (true);
+  create policy "read groups" on groups for select using (true);
+  create policy "add groups" on groups for insert with check (true);
+-->
+<style>
+/* VOICE: warm, practical, calm — a friend who's done the recce for you
+   IDEA: a park noticeboard crossed with a checklist: three ticks per place
+   PICTURE: the live map + ranked list is the picture
+   COLOUR and TYPE: park green, sand, coral accent; Baloo 2 + Nunito Sans
+   LAYOUT: search on top, list beside map on wide screens, tabs on phones */
+:root{color-scheme:light dark;--bg:light-dark(#f7f4ec,#10201a);--card:light-dark(#fff,#18302a);--ink:light-dark(#14271f,#eef3ef);--mute:light-dark(#5b6b63,#a6b8ae);--line:light-dark(#e3ddcf,#2a453b);--green:#1f5c45;--coral:#ff6b4a;--ok:light-dark(#dcefe3,#1f4a37);--okI:light-dark(#165a3a,#a8e6c3);--may:light-dark(#fdf0d2,#4a3d1c);--mayI:light-dark(#7a5300,#f3d48b);--no:light-dark(#f3e4e0,#4a2a24);--noI:light-dark(#8a3b2a,#f1b5a6)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Nunito Sans",system-ui,sans-serif;overflow-x:clip}
+h1,h2,h3{font-family:"Baloo 2",system-ui,sans-serif;line-height:1.05;margin:0;text-wrap:balance}
+button,input,select,textarea{font:inherit;font-size:16px;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--coral);outline-offset:2px}
+.top{background:var(--green);color:#fff;padding:18px max(4vw,16px) 0}
+.brand{display:flex;gap:12px;align-items:center;max-width:1240px;margin:0 auto}
+.brand h1{font-size:clamp(30px,5vw,44px);font-weight:800}
+.brand p{margin:0;opacity:.85;font-size:15px}
+.controls{max-width:1240px;margin:14px auto 0;display:grid;gap:10px;padding-bottom:14px}
+.searchrow{display:flex;gap:8px;flex-wrap:wrap}
+.searchrow input{flex:1 1 220px;min-height:46px;border:0;border-radius:12px;padding:0 14px;background:#fff;color:#14271f}
+.btn{min-height:46px;border:0;border-radius:12px;padding:0 16px;font-weight:800;background:var(--coral);color:#1b0d08}
+.btn.ghost{background:rgba(255,255,255,.14);color:#fff}
+.btn.plain{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px}
+.opts select{min-height:40px;border-radius:10px;border:0;padding:0 8px;background:rgba(255,255,255,.14);color:#fff}
+.opts select option{color:#14271f}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{min-height:40px;border-radius:99px;padding:0 14px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;font-weight:700;font-size:14px}
+.chip[aria-pressed=true]{background:#fff;color:var(--green)}
+.tabs{display:flex;gap:4px;max-width:1240px;margin:0 auto}
+.tab{flex:1;min-height:46px;border:0;border-radius:12px 12px 0 0;background:transparent;color:#fff;font-weight:800}
+.tab[aria-selected=true]{background:var(--bg);color:var(--ink)}
+main{max-width:1240px;margin:0 auto;padding:14px max(4vw,16px) 40px}
+.split{display:grid;gap:16px}
+#mapPane{height:calc(100dvh - 260px);min-height:380px;border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+#map{height:100%}
+body[data-tab=list] #mapPane,body[data-tab=list] #groupsPane,body[data-tab=map] #listPane,body[data-tab=map] #groupsPane,body[data-tab=groups] .split{display:none}
+@media(min-width:900px){.tab[data-t=map]{display:none}.split{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)}body[data-tab=list] #mapPane,body[data-tab=map] #listPane{display:block}#mapPane{position:sticky;top:12px}#listPane{max-height:calc(100dvh - 240px);overflow:auto;padding-right:4px}}
+.status{color:var(--mute);font-size:15px;margin:0 0 10px}
+.status b{color:var(--ink)}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.card{width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;display:grid;gap:6px}
+.card:hover{border-color:var(--green)}
+.kind{font-size:13px;color:var(--mute);font-weight:700}
+.card h3{font-size:21px;font-weight:600}
+.ticks{display:flex;flex-wrap:wrap;gap:6px}
+.t{font-size:13px;font-weight:700;border-radius:8px;padding:3px 8px;white-space:nowrap}
+.t.ok{background:var(--ok);color:var(--okI)}.t.may{background:var(--may);color:var(--mayI)}.t.no{background:var(--no);color:var(--noI)}
+.stars{color:var(--coral);font-weight:800;font-size:14px}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:22px;text-align:center;color:var(--mute)}
+.empty h2{color:var(--ink);font-size:26px;margin-bottom:6px}
+.sheetWrap{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:1000}
+.sheetWrap[hidden]{display:none}
+.sheet{background:var(--bg);width:min(720px,100%);max-height:92dvh;overflow:auto;border-radius:20px 20px 0 0;padding:20px max(4vw,16px) 32px}
+@media(min-width:760px){.sheetWrap{align-items:center}.sheet{border-radius:20px}}
+.sheet h2{font-size:30px}
+.close{float:right;width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--card);font-size:22px;line-height:1}
+.facts{display:grid;gap:8px;margin:14px 0}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:15px}
+.fact a{color:inherit;font-weight:700}
+.links{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
+.links a{display:inline-flex;align-items:center;min-height:44px;padding:0 14px;border-radius:12px;background:var(--green);color:#fff;font-weight:800;text-decoration:none}
+h3.sec{font-size:22px;margin:22px 0 8px}
+.avg{display:grid;gap:6px}
+.avgrow{display:grid;grid-template-columns:minmax(0,1fr) 120px 34px;gap:8px;align-items:center;font-size:14px}
+.bar{height:8px;border-radius:9px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--coral)}
+.rate{display:grid;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.rrow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:15px}
+.starbtns{display:flex}
+.starbtns button{width:40px;height:44px;border:0;background:none;font-size:26px;color:var(--line);padding:0}
+.starbtns button.on{color:var(--coral)}
+textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:10px}
+.field{display:grid;gap:4px;font-size:14px;font-weight:700}
+.form{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.form .wide{grid-column:1/-1}
+.note{font-size:13px;color:var(--mute)}
+.rev{border-top:1px solid var(--line);padding:10px 0;font-size:15px}
+.leaflet-container{font:inherit}
+@media(prefers-reduced-motion:no-preference){.card{transition:border-color .15s,transform .15s}.card:active{transform:scale(.99)}}
+</style>
+</head>
+<body data-tab="list">
+<header class="top">
+  <div class="brand">
+    <svg width="48" height="48" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="24" fill="#ff6b4a"/><circle cx="18" cy="17" r="6" fill="#fff"/><path d="M9 38c0-7 4-12 9-12s9 5 9 12z" fill="#fff"/><circle cx="32" cy="24" r="4" fill="#1f5c45"/><path d="M26 38c0-5 3-8 6-8s6 3 6 8z" fill="#1f5c45"/></svg>
+    <div><h1>Hands Full</h1><p>Places that work with a toddler <em>and</em> a newborn.</p></div>
+  </div>
+  <form class="controls" id="searchForm">
+    <div class="searchrow">
+      <input id="q" type="search" placeholder="Town, postcode or area" aria-label="Search a place" autocomplete="off">
+      <button class="btn" type="submit">Search</button>
+      <button class="btn ghost" type="button" id="locate">Near me</button>
+    </div>
+    <div class="opts">
+      <label>Within <select id="radius"><option value="1000">1 km</option><option value="2000" selected>2 km</option><option value="3000">3 km</option><option value="5000">5 km</option></select></label>
+      <label>Café/toilet within <select id="walk"><option value="5">5 min walk</option><option value="8" selected>8 min walk</option><option value="12">12 min walk</option></select></label>
+    </div>
+    <div class="chips" id="filters">
+      <button type="button" class="chip" data-f="all" aria-pressed="true">Everything</button>
+      <button type="button" class="chip" data-f="match" aria-pressed="false">Café + toilet nearby</button>
+      <button type="button" class="chip" data-f="playground" aria-pressed="false">Playgrounds</button>
+      <button type="button" class="chip" data-f="softplay" aria-pressed="false">Soft play</button>
+      <button type="button" class="chip" data-f="venue" aria-pressed="false">Libraries &amp; halls</button>
+    </div>
+  </form>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" data-t="list" aria-selected="true">List</button>
+    <button class="tab" role="tab" data-t="map" aria-selected="false">Map</button>
+    <button class="tab" role="tab" data-t="groups" aria-selected="false">Groups &amp; classes</button>
+  </nav>
+</header>
+
+<main>
+  <div class="split">
+    <section id="listPane"><p class="status" id="status"></p><ul id="list"></ul></section>
+    <section id="mapPane"><div id="map"></div></section>
+  </div>
+  <section id="groupsPane">
+    <p class="status">Playgroups, rhyme times, baby classes and church groups often only live on Facebook, Instagram or a noticeboard. Add the ones you know so other parents can find them.</p>
+    <details class="rate" id="addGroupBox">
+      <summary><b>Add a group or class</b></summary>
+      <form class="form" id="groupForm" style="margin-top:12px">
+        <label class="field">Name<input name="name" required maxlength="120" placeholder="Little Acorns Toddler Group"></label>
+        <label class="field">Type<select name="kind"><option>Playgroup</option><option>Rhyme time / story time</option><option>Baby group</option><option>Soft play</option><option>Class (music, swim, sensory)</option><option>Other</option></select></label>
+        <label class="field">When<input name="schedule" maxlength="120" placeholder="Tuesdays 10:00–11:30, term time"></label>
+        <label class="field">Where<input name="place" required maxlength="160" placeholder="St Mary's church hall, High St"></label>
+        <label class="field">Cost<input name="cost" maxlength="60" placeholder="£2 per family, includes coffee"></label>
+        <label class="field">Found it on<select name="source"><option>Facebook</option><option>Instagram</option><option>Church / community noticeboard</option><option>Library</option><option>Council website</option><option>Word of mouth</option><option>Other</option></select></label>
+        <label class="field wide">Link (optional)<input name="link" type="url" maxlength="300" placeholder="https://…"></label>
+        <label class="field wide">Good to know<textarea name="notes" maxlength="500" placeholder="Buggy park inside, toilets with changing mat, quiet corner for feeding"></textarea></label>
+        <p class="note wide" id="groupPin">Pinned to your current search area.</p>
+        <button class="btn wide" type="submit">Add group</button>
+      </form>
+    </details>
+    <h3 class="sec">Nearby groups</h3>
+    <ul id="groupList"></ul>
+  </section>
+</main>
+
+<div class="sheetWrap" id="sheetWrap" hidden><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" id="sheet"></div></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+{
+/* Fill these to share reviews and groups between everyone (see SQL at the top). Empty = saved in this browser only. */
+const CFG = { supabaseUrl: 'https://wztwjowegmzthleqttai.supabase.co', supabaseKey: 'sb_publishable_anXcnFg0Lf7RB_ijRrK40A_6VdSQTqQ' }; // e.g. 'https://abcd.supabase.co' and the publishable (sb_publishable_…) or anon key — both are safe to be public
+
+const OVERPASS = 'https://overpass-api.de/api/interpreter';
+const M_PER_MIN = 67, DETOUR = 1.3; // ~4 km/h with a buggy; straight line × 1.3 ≈ walking route
+const METRICS = [['overall','Overall'],['solo','Toddler can play mostly solo'],['feeding','Comfy spot to feed baby'],['clean','Cleanliness'],['value','Value for money'],['buggy','Buggy access']];
+const KIND = { playground: 'Playground', softplay: 'Soft play', venue: 'Library / hall' };
+const S = { center: null, places: [], filter: 'all', radius: 2000, walk: 8, ratings: {} };
+
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const safeUrl = u => /^https?:\/\//i.test(u || '') ? u : '';
+const dist = (a, b) => { const r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lon - a.lon) * r; const h = Math.sin(dLa/2)**2 + Math.cos(a.lat*r) * Math.cos(b.lat*r) * Math.sin(dLo/2)**2; return 12742000 * Math.asin(Math.sqrt(h)); };
+const mins = m => Math.max(1, Math.round(m * DETOUR / M_PER_MIN));
+const km = m => m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km';
+const dirUrl = p => `https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=${p.lat},${p.lon}`;
+
+/* ---------- storage: this browser, or Supabase when configured ---------- */
+const LS = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const shared = () => !!(CFG.supabaseUrl && CFG.supabaseKey);
+const sb = async (path, opt = {}) => {
+  const r = await fetch(CFG.supabaseUrl + '/rest/v1/' + path, { ...opt, headers: { apikey: CFG.supabaseKey, ...(CFG.supabaseKey.startsWith('eyJ') ? { Authorization: 'Bearer ' + CFG.supabaseKey } : {}), 'Content-Type': 'application/json', Prefer: 'return=minimal' } });
+  if (!r.ok) throw new Error('Could not reach the reviews server');
+  return opt.method ? null : r.json();
+};
+const Store = {
+  async reviews(id) { return shared() ? sb('reviews?select=*&order=created_at.desc&place_id=eq.' + encodeURIComponent(id)) : (LS.get('hf-rev', {})[id] || []); },
+  async addReview(id, r) { if (shared()) return sb('reviews', { method: 'POST', body: JSON.stringify({ place_id: id, ...r }) }); const all = LS.get('hf-rev', {}); (all[id] = all[id] || []).unshift({ ...r, created_at: new Date().toISOString() }); LS.set('hf-rev', all); },
+  async allRatings() { if (shared()) { const rows = await sb('reviews?select=place_id,overall&limit=5000'); const o = {}; rows.forEach(r => (o[r.place_id] = o[r.place_id] || []).push(r)); return o; } return LS.get('hf-rev', {}); },
+  async groups() { return shared() ? sb('groups?select=*&order=created_at.desc&limit=500') : LS.get('hf-groups', []); },
+  async addGroup(g) { if (shared()) return sb('groups', { method: 'POST', body: JSON.stringify(g) }); const all = LS.get('hf-groups', []); all.unshift({ ...g, created_at: new Date().toISOString() }); LS.set('hf-groups', all); }
+};
+
+/* ---------- data: OpenStreetMap ---------- */
+async function fetchOSM(c) {
+  const a = `(around:${S.radius},${c.lat},${c.lon})`, b = `(around:${S.radius + 900},${c.lat},${c.lon})`;
+  const q = `[out:json][timeout:40];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};nwr["leisure"="park"]["name"]${b};nwr["amenity"="cafe"]${b};nwr["amenity"="toilets"]${b};nwr["toilets"="yes"]${b};node["playground"]${b};);out center tags;`;
+  const r = await fetch(OVERPASS, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  if (!r.ok) throw new Error(`The map data server is busy (${r.status}). Try again in a minute.`);
+  return (await r.json()).elements;
+}
+
+function build(els, c) {
+  const pts = els.map(e => ({ id: e.type[0] + e.id, t: e.tags || {}, lat: e.lat ?? e.center?.lat, lon: e.lon ?? e.center?.lon })).filter(p => p.lat != null);
+  const cafes = pts.filter(p => p.t.amenity === 'cafe');
+  const loos = pts.filter(p => (p.t.amenity === 'toilets' && !['private', 'no', 'customers'].includes(p.t.access)) || p.t.toilets === 'yes');
+  const parks = pts.filter(p => p.t.leisure === 'park');
+  const kit = pts.filter(p => p.t.playground && !p.t.leisure);
+  const nearest = (p, arr, max) => { let best = null; for (const x of arr) { if (x.id === p.id) continue; const d = dist(p, x); if (d <= max && (!best || d < best.d)) best = { x, d }; } return best; };
+  const lim = S.walk * M_PER_MIN / DETOUR, seen = new Set(), out = [];
+  for (const p of pts) {
+    const t = p.t; let kind = null;
+    if (t.leisure === 'indoor_play' || (t.leisure === 'playground' && t.indoor === 'yes')) kind = 'softplay';
+    else if (t.leisure === 'playground') kind = 'playground';
+    else if (t.amenity === 'library' || t.amenity === 'community_centre') kind = 'venue';
+    if (!kind) continue;
+    const away = dist(c, p); if (away > S.radius) continue;
+    const key = kind + Math.round(p.lat * 4000) + ',' + Math.round(p.lon * 4000); if (seen.has(key)) continue; seen.add(key);
+    const cafe = nearest(p, cafes, lim), loo = nearest(p, loos, lim);
+    const cafeS = cafe ? 'ok' : kind === 'softplay' ? 'may' : 'no';
+    const looS = t.toilets === 'yes' || loo ? 'ok' : (cafe || kind !== 'playground') ? 'may' : 'no';
+    const sig = [];
+    if (kind === 'playground') {
+      const items = kit.filter(k => dist(p, k) < 70).map(k => k.t);
+      const has = f => items.some(f);
+      if (t.fenced === 'yes' || t.barrier === 'fence') sig.push('fenced');
+      if (+t.min_age <= 2 || +t.max_age && +t.max_age <= 6 || /toddler|baby|infant/i.test(t.name || '')) sig.push('toddler area');
+      if (has(i => i.playground === 'baby_swing' || (i.playground === 'swing' && /baby|basket/.test(i.baby || i['swing:type'] || '')))) sig.push('baby swing');
+      if (has(i => i.playground === 'sandpit')) sig.push('sandpit');
+      if (has(i => i.playground === 'springy')) sig.push('springy rider');
+      if (has(i => i.playground === 'playhouse' || i.playground === 'slide' && +i.height && +i.height < 1.5)) sig.push('low play');
+      if (t.surface && /rubber|tartan|grass|woodchips|bark/.test(t.surface)) sig.push('soft surface');
+    }
+    let name = t.name;
+    if (!name && kind === 'playground') { const pk = nearest(p, parks, 350); name = pk ? 'Playground, ' + pk.x.t.name : 'Playground (unnamed)'; }
+    name = name || KIND[kind];
+    const score = (cafeS === 'ok' ? 3 : cafeS === 'may' ? 2 : 0) + (looS === 'ok' ? 3 : looS === 'may' ? 1.5 : 0) + Math.min(sig.length, 3) - away / 1500;
+    out.push({ ...p, kind, name, away, cafe, loo, cafeS, looS, sig, score });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/* ---------- rendering ---------- */
+const avg = arr => { const v = arr.map(r => +r.overall).filter(n => n > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+function ticks(p) {
+  const c = p.cafeS === 'ok' ? `<span class="t ok">Café ${mins(p.cafe.d)} min</span>` : p.cafeS === 'may' ? '<span class="t may">Café usually inside</span>' : '<span class="t no">No café nearby</span>';
+  const l = p.looS === 'ok' ? `<span class="t ok">Toilet ${p.loo ? mins(p.loo.d) + ' min' : 'on site'}</span>` : p.looS === 'may' ? `<span class="t may">Toilet likely (${p.kind === 'playground' ? 'in café' : 'inside'})</span>` : '<span class="t no">No toilet found</span>';
+  const k = p.kind !== 'playground' ? '' : p.sig.length ? `<span class="t ok">${esc(p.sig.slice(0, 2).join(', '))}</span>` : '<span class="t may">Toddler kit unknown</span>';
+  return c + l + k;
+}
+const visible = () => S.places.filter(p => S.filter === 'all' ? true : S.filter === 'match' ? p.cafeS !== 'no' && p.looS !== 'no' : p.kind === S.filter);
+
+function renderList() {
+  const list = visible(), ul = $('#list');
+  if (!S.center) { ul.innerHTML = `<li class="empty"><h2>Where are you heading?</h2>Search a town or postcode, or tap <b>Near me</b>. Each place gets three checks: a café to sit and feed, a toilet for the toddler, and play they can mostly manage alone.</li>`; $('#status').textContent = ''; return; }
+  $('#status').innerHTML = `<b>${list.length}</b> place${list.length === 1 ? '' : 's'} · best matches first · data from OpenStreetMap`;
+  ul.innerHTML = list.length ? list.map(p => { const a = avg(S.ratings[p.id] || []); return `<li><button class="card" data-id="${esc(p.id)}"><span class="kind">${KIND[p.kind]} · ${km(p.away)} away</span><h3>${esc(p.name)}</h3><span class="ticks">${ticks(p)}</span>${a ? `<span class="stars">★ ${a.toFixed(1)} from parents</span>` : ''}</button></li>`; }).join('')
+    : '<li class="empty">Nothing matches this filter here. Try a bigger radius or a longer walk.</li>';
+  drawMarkers(list);
+}
+
+let map, layer, here;
+function initMap() {
+  if (!window.L) { $('#mapPane').innerHTML = '<p class="empty">The map could not load. The list still works.</p>'; return; }
+  map = L.map('map').setView([51.505, -0.12], 12);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+  layer = L.layerGroup().addTo(map);
+}
+function drawMarkers(list) {
+  if (!map) return;
+  layer.clearLayers();
+  if (here) here.remove();
+  here = L.circleMarker([S.center.lat, S.center.lon], { radius: 7, color: '#fff', weight: 3, fillColor: '#2b6cff', fillOpacity: 1 }).addTo(map);
+  const pts = list.map(p => {
+    const good = p.cafeS !== 'no' && p.looS !== 'no';
+    L.circleMarker([p.lat, p.lon], { radius: good ? 10 : 7, color: '#fff', weight: 2, fillColor: good ? '#ff6b4a' : '#7b8f86', fillOpacity: .95 })
+      .bindTooltip(p.name).on('click', () => openPlace(p.id)).addTo(layer);
+    return [p.lat, p.lon];
+  });
+  pts.push([S.center.lat, S.center.lon]);
+  map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
+}
+
+async function openPlace(id) {
+  const p = S.places.find(x => x.id === id); if (!p) return;
+  const t = p.t, site = safeUrl(t.website || t['contact:website']);
+  const addr = [t['addr:housenumber'], t['addr:street'], t['addr:postcode']].filter(Boolean).join(' ');
+  const cafeLine = p.cafe ? `<b>Café:</b> ${esc(p.cafe.x.t.name || 'Unnamed café')} — ${mins(p.cafe.d)} min walk${p.cafe.x.t.opening_hours ? ` · hours ${esc(p.cafe.x.t.opening_hours)}` : ''}${p.cafe.x.t.changing_table === 'yes' ? ' · baby change listed' : ''}${p.cafe.x.t.wheelchair === 'yes' ? ' · step-free' : ''} · <a href="${dirUrl(p.cafe.x)}" target="_blank" rel="noopener">directions</a>` : p.cafeS === 'may' ? '<b>Café:</b> soft plays usually have one inside — check below or ask other parents.' : `<b>Café:</b> none mapped within ${S.walk} min walk.`;
+  const looLine = p.loo ? `<b>Toilet:</b> ${esc(p.loo.x.t.name || (p.loo.x.t.amenity === 'toilets' ? 'Public toilet' : 'Toilets at ' + (p.loo.x.t.amenity || 'venue')))} — ${mins(p.loo.d)} min walk${p.loo.x.t.changing_table === 'yes' ? ' · baby change' : ''}${p.loo.x.t.fee === 'yes' ? ' · paid' : ''} · <a href="${dirUrl(p.loo.x)}" target="_blank" rel="noopener">directions</a>` : p.looS === 'ok' ? '<b>Toilet:</b> on site.' : p.looS === 'may' ? `<b>Toilet:</b> none mapped, but ${p.kind === 'playground' ? 'the café nearby probably has one' : 'venues like this usually do'}.` : `<b>Toilet:</b> none mapped within ${S.walk} min walk.`;
+  const kidLine = p.kind === 'playground' ? `<b>For the toddler:</b> ${p.sig.length ? esc(p.sig.join(', ')) : 'no equipment details mapped yet — a rating below helps the next parent'}` : '';
+  $('#sheet').innerHTML = `<button class="close" aria-label="Close" data-close>×</button>
+    <span class="kind">${KIND[p.kind]} · ${km(p.away)} away</span><h2 id="sheetTitle">${esc(p.name)}</h2>
+    ${addr ? `<p class="note">${esc(addr)}</p>` : ''}
+    <div class="facts"><div class="fact">${cafeLine}</div><div class="fact">${looLine}</div>${kidLine ? `<div class="fact">${kidLine}</div>` : ''}${t.opening_hours ? `<div class="fact"><b>Opening hours:</b> ${esc(t.opening_hours)}</div>` : ''}</div>
+    <div class="links"><a href="${dirUrl(p)}" target="_blank" rel="noopener">Walking directions</a>${site ? `<a href="${esc(site)}" target="_blank" rel="noopener">Website</a>` : ''}${p.kind === 'venue' ? '<a href="#" data-addgroup>Add a group here</a>' : ''}</div>
+    <h3 class="sec">What parents say</h3><div id="revBox"><p class="note">Loading…</p></div>
+    <h3 class="sec">Rate it</h3>
+    <form class="rate" id="rateForm">${METRICS.map(([k, label]) => `<div class="rrow"><span>${label}</span><span class="starbtns" data-k="${k}">${[1,2,3,4,5].map(n => `<button type="button" data-n="${n}" aria-label="${label}: ${n} of 5">★</button>`).join('')}</span></div>`).join('')}
+      <textarea name="comment" maxlength="600" placeholder="Anything another parent should know? e.g. gate latches, where to sit and feed, how busy it gets"></textarea>
+      <p class="note">Skip any you can't judge. ${shared() ? 'Reviews are shared with everyone.' : 'Reviews are saved on this device until sharing is switched on.'}</p>
+      <button class="btn" type="submit">Save rating</button></form>`;
+  $('#sheetWrap').hidden = false;
+  const picks = {};
+  $('#sheet').querySelectorAll('.starbtns').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; picks[g.dataset.k] = +b.dataset.n; g.querySelectorAll('button').forEach(x => x.classList.toggle('on', +x.dataset.n <= picks[g.dataset.k])); }));
+  $('#rateForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!Object.keys(picks).length) { e.target.querySelector('.note').textContent = 'Tap at least one star first.'; return; }
+    const r = { comment: e.target.comment.value.trim().slice(0, 600) }; METRICS.forEach(([k]) => r[k] = picks[k] || 0);
+    try { await Store.addReview(p.id, r); S.ratings = await Store.allRatings(); renderReviews(p.id); renderList(); e.target.reset(); e.target.querySelectorAll('.on').forEach(x => x.classList.remove('on')); Object.keys(picks).forEach(k => delete picks[k]); e.target.querySelector('.note').textContent = 'Thanks — saved.'; }
+    catch (err) { e.target.querySelector('.note').textContent = err.message; }
+  });
+  const ag = $('#sheet [data-addgroup]');
+  if (ag) ag.addEventListener('click', e => { e.preventDefault(); closeSheet(); setTab('groups'); $('#addGroupBox').open = true; const f = $('#groupForm'); f.place.value = p.name + (addr ? ', ' + addr : ''); f.dataset.lat = p.lat; f.dataset.lon = p.lon; $('#groupPin').textContent = 'Pinned to ' + p.name + '.'; f.name.focus(); });
+  renderReviews(p.id);
+}
+async function renderReviews(id) {
+  const box = $('#revBox'); if (!box) return;
+  let rows; try { rows = await Store.reviews(id); } catch (e) { box.innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  if (!rows.length) { box.innerHTML = '<p class="note">No ratings yet. Be the first.</p>'; return; }
+  const rowsHtml = METRICS.map(([k, label]) => { const v = rows.map(r => +r[k]).filter(n => n > 0); if (!v.length) return ''; const a = v.reduce((x, y) => x + y, 0) / v.length; return `<div class="avgrow"><span>${label}</span><span class="bar"><i style="width:${a * 20}%"></i></span><b>${a.toFixed(1)}</b></div>`; }).join('');
+  box.innerHTML = `<p class="note">${rows.length} rating${rows.length === 1 ? '' : 's'}</p><div class="avg">${rowsHtml}</div>` + rows.filter(r => r.comment).slice(0, 20).map(r => `<div class="rev">${esc(r.comment)}<div class="note">${esc(new Date(r.created_at).toLocaleDateString())}</div></div>`).join('');
+}
+function closeSheet() { $('#sheetWrap').hidden = true; }
+
+async function renderGroups() {
+  const ul = $('#groupList');
+  let gs; try { gs = await Store.groups(); } catch (e) { ul.innerHTML = `<li class="empty">${esc(e.message)}</li>`; return; }
+  if (S.center) gs = gs.map(g => ({ ...g, d: g.lat != null ? dist(S.center, g) : Infinity })).filter(g => g.d < 15000 || g.d === Infinity).sort((a, b) => a.d - b.d);
+  ul.innerHTML = gs.length ? gs.map(g => { const link = safeUrl(g.link); return `<li class="card"><span class="kind">${esc(g.kind)}${g.d != null && isFinite(g.d) ? ' · ' + km(g.d) + ' away' : ''}</span><h3>${esc(g.name)}</h3>
+    <div>${g.schedule ? `<b>${esc(g.schedule)}</b><br>` : ''}${esc(g.place)}${g.cost ? ' · ' + esc(g.cost) : ''}</div>${g.notes ? `<div class="note">${esc(g.notes)}</div>` : ''}
+    <div class="note">Found on ${esc(g.source || 'unknown')}${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener">open link</a>` : ''}</div></li>`; }).join('')
+    : '<li class="empty">No groups added around here yet. Know a playgroup or rhyme time? Add it above.</li>';
+}
+
+/* ---------- actions ---------- */
+async function go(center, label) {
+  S.center = center; LS.set('hf-last', { center, label, radius: S.radius, walk: S.walk });
+  $('#status').textContent = 'Finding playgrounds, cafés and toilets around ' + (label || 'you') + '…'; $('#list').innerHTML = '';
+  try { const [els, ratings] = await Promise.all([fetchOSM(center), Store.allRatings().catch(() => ({}))]); S.ratings = ratings; S.places = build(els, center); renderList(); renderGroups(); }
+  catch (e) { $('#status').textContent = e.message || 'Something went wrong loading places.'; }
+}
+async function geocode(q) {
+  const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+  const j = await r.json(); if (!j.length) throw new Error('Couldn’t find “' + q + '”. Try a postcode.');
+  return { center: { lat: +j[0].lat, lon: +j[0].lon }, label: j[0].display_name.split(',').slice(0, 2).join(',') };
+}
+function setTab(t) { document.body.dataset.tab = t; document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.t === t)); if (t !== 'groups' && map) setTimeout(() => map.invalidateSize(), 50); if (t === 'groups') renderGroups(); }
+
+$('#searchForm').addEventListener('submit', async e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; try { const g = await geocode(q); go(g.center, g.label); } catch (err) { $('#status').textContent = err.message; } });
+$('#locate').addEventListener('click', () => { if (!navigator.geolocation) { $('#status').textContent = 'Location isn’t available here — search instead.'; return; } $('#status').textContent = 'Finding you…'; navigator.geolocation.getCurrentPosition(p => go({ lat: p.coords.latitude, lon: p.coords.longitude }, 'you'), () => { $('#status').textContent = 'Location was blocked — search a town or postcode instead.'; }, { timeout: 10000 }); });
+$('#radius').addEventListener('change', e => { S.radius = +e.target.value; if (S.center) go(S.center); });
+$('#walk').addEventListener('change', e => { S.walk = +e.target.value; if (S.center) go(S.center); });
+$('#filters').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; S.filter = b.dataset.f; document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b)); renderList(); });
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.t)));
+$('#list').addEventListener('click', e => { const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
+$('#sheetWrap').addEventListener('click', e => { if (e.target.id === 'sheetWrap' || e.target.closest('[data-close]')) closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+$('#groupForm').addEventListener('submit', async e => {
+  e.preventDefault(); const f = e.target, fd = Object.fromEntries(new FormData(f));
+  const lat = f.dataset.lat ? +f.dataset.lat : S.center?.lat, lon = f.dataset.lon ? +f.dataset.lon : S.center?.lon;
+  try { await Store.addGroup({ ...fd, link: safeUrl(fd.link), lat: lat ?? null, lon: lon ?? null }); f.reset(); delete f.dataset.lat; delete f.dataset.lon; $('#groupPin').textContent = 'Added — thank you. Pinned to your current search area.'; renderGroups(); }
+  catch (err) { $('#groupPin').textContent = err.message; }
+});
+
+initMap();
+const last = LS.get('hf-last', null);
+if (last?.center) { S.radius = last.radius || 2000; S.walk = last.walk || 8; $('#radius').value = S.radius; $('#walk').value = S.walk; $('#q').value = last.label && last.label !== 'you' ? last.label : ''; go(last.center, last.label); }
+else { renderList(); renderGroups(); }
+}
+</script>
+</body>
+</html>
