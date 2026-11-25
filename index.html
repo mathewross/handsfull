@@ -110,9 +110,10 @@ h3.sec{font-size:22px;margin:22px 0 8px}
 .avgrow{display:grid;grid-template-columns:minmax(0,1fr) 120px 34px;gap:8px;align-items:center;font-size:14px}
 .bar{height:8px;border-radius:9px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--coral)}
 .rate{display:grid;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
-.rrow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:15px}
-.starbtns{display:flex}
-.starbtns button{width:40px;height:44px;border:0;background:none;font-size:26px;color:var(--line);padding:0}
+.rrow{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:15px;line-height:1.25}
+.rrow>span:first-child{flex:1}
+.starbtns{display:flex;flex:none}
+.starbtns button{width:36px;height:44px;border:0;background:none;font-size:26px;color:var(--line);padding:0}
 .starbtns button.on{color:var(--coral)}
 textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:10px}
 .field{display:grid;gap:4px;font-size:14px;font-weight:700}
@@ -196,7 +197,7 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
 const CFG = { supabaseUrl: 'https://wztwjowegmzthleqttai.supabase.co', supabaseKey: 'sb_publishable_anXcnFg0Lf7RB_ijRrK40A_6VdSQTqQ' }; // e.g. 'https://abcd.supabase.co' and the publishable (sb_publishable_…) or anon key — both are safe to be public
 
 const M_PER_MIN = 67, DETOUR = 1.3; // ~4 km/h with a buggy; straight line × 1.3 ≈ walking route
-const METRICS = [['overall','Overall'],['solo','Toddler can play mostly solo'],['feeding','Comfy spot to feed baby'],['clean','Cleanliness'],['value','Value for money'],['buggy','Buggy access']];
+const METRICS = [['overall','Overall'],['solo','Toddler can play solo'],['feeding','Comfy to feed baby'],['clean','Cleanliness'],['value','Value for money'],['buggy','Buggy access']];
 const KIND = { playground: 'Playground', softplay: 'Soft play', venue: 'Library / hall' };
 const S = { center: null, places: [], filter: 'all', sort: 'best', shown: 100, radius: 15000, walk: 8, ratings: {} };
 
@@ -230,33 +231,43 @@ const Store = {
 /* Public Overpass servers: tried in order, because any one of them can be busy. */
 const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const setStatus = t => { $('#status').textContent = t; };
-async function fetchOSM(c) {
-  const ck = `hf-osm:${c.lat.toFixed(3)},${c.lon.toFixed(3)},${S.radius},${S.walk}`;
-  try { const hit = JSON.parse(localStorage.getItem(ck)); if (hit && Date.now() - hit.t < 3 * 864e5) return hit.e; } catch {}
-  const elements = await fetchOSMLive(c);
-  try { Object.keys(localStorage).filter(k => k.startsWith('hf-osm:')).forEach(k => localStorage.removeItem(k)); const str = JSON.stringify({ t: Date.now(), e: elements }); if (str.length < 3.5e6) localStorage.setItem(ck, str); } catch {}
-  return elements;
+const WALK_MAX = 12; // always fetch for the longest walk option, so changing walk time needs no download
+/* Ask several public servers in a staggered race: start one, add a backup if it's slow or fails, first answer wins. */
+function overpass(q) {
+  return new Promise((resolve, reject) => {
+    const ctls = [], errs = []; let next = 0, done = false, timer;
+    const launch = () => {
+      if (done || next >= MIRRORS.length) return;
+      const url = MIRRORS[next++], ctl = new AbortController(); ctls.push(ctl);
+      if (next > 1 && !S.els) setStatus('The main data server is busy, trying a backup…');
+      clearTimeout(timer); timer = setTimeout(launch, 7000);
+      fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal })
+        .then(async r => {
+          if (!r.ok) throw new Error(r.status === 429 ? 'too many requests' : r.status >= 500 ? 'busy' : 'error ' + r.status);
+          const j = await r.json();
+          if (j.remark && /error|timed out|out of memory/i.test(j.remark)) throw new Error('query too big');
+          if (!done) { done = true; clearTimeout(timer); ctls.forEach(c => c !== ctl && c.abort()); resolve(j.elements); }
+        })
+        .catch(e => {
+          if (done || e.name === 'AbortError') return;
+          errs.push(e.name === 'TypeError' ? 'no response' : e.message);
+          if (next < MIRRORS.length) launch();
+          else if (errs.length === MIRRORS.length) { done = true; clearTimeout(timer); reject(new Error(`All map data servers are busy right now (${errs.join(', ')}). Try again in a minute, or a smaller radius.`)); }
+        });
+    };
+    launch();
+    setTimeout(() => { if (!done) { done = true; ctls.forEach(c => c.abort()); reject(new Error('Map data took too long. Try a smaller radius, or again in a minute.')); } }, 90000);
+  });
 }
-async function fetchOSMLive(c) {
-  // 1) venues in the search radius → set .v   2) cafés, toilets, park names and play kit only around those venues
-  const lim = Math.round(S.walk * M_PER_MIN / DETOUR) + 50, a = `(around:${S.radius},${c.lat},${c.lon})`;
-  const q = `[out:json][timeout:50][maxsize:67108864];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};)->.v;.v out tags center qt;(nwr["amenity"="cafe"](around.v:${lim});nwr["amenity"="toilets"](around.v:${lim});nwr["toilets"="yes"](around.v:${lim});node["playground"~"^(sandpit|baby_swing|swing|springy|playhouse|slide)$"](around.v:60););out tags center qt;(nwr["leisure"~"^(park|garden|recreation_ground|common|nature_reserve|pitch)$"]["name"](around.v:150);nwr["landuse"~"^(recreation_ground|village_green|grass)$"]["name"](around.v:150);nwr["amenity"~"^(school|place_of_worship)$"]["name"](around.v:60);nwr["landuse"="residential"]["name"](around.v:50););out tags center bb qt;node["place"~"^(suburb|neighbourhood|quarter|village|town|hamlet)$"](around.v:3000);out tags qt;`;
-  let why = '';
-  for (const url of MIRRORS) {
-    const host = new URL(url).hostname, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 60000);
-    try {
-      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
-      if (!r.ok) throw new Error(r.status === 429 ? 'too many requests' : r.status >= 500 ? 'server overloaded' : 'error ' + r.status);
-      const j = await r.json();
-      if (j.remark && /error|timed out|out of memory/i.test(j.remark)) throw new Error('query too big for the server');
-      return j.elements;
-    } catch (e) {
-      why = e.name === 'AbortError' ? 'timed out' : e.message === 'Failed to fetch' || e.name === 'TypeError' ? 'no response' : e.message;
-      setStatus(`Map server ${host}: ${why}. Trying another…`);
-    } finally { clearTimeout(timer); }
-  }
-  throw new Error(`Couldn’t load map data from any server (last one: ${why}). Try a smaller radius, or again in a minute.`);
-}
+const venueSel = a => `nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};`;
+const quickQ = (c, R) => `[out:json][timeout:25][maxsize:33554432];(${venueSel(`(around:${R},${c.lat},${c.lon})`)});out tags center qt;`;
+const fullQ = (c, R) => {
+  const lim = Math.round(WALK_MAX * M_PER_MIN / DETOUR) + 50;
+  return `[out:json][timeout:50][maxsize:67108864];(${venueSel(`(around:${R},${c.lat},${c.lon})`)})->.v;.v out tags center qt;(nwr["amenity"="cafe"](around.v:${lim});nwr["amenity"="toilets"](around.v:${lim});nwr["toilets"="yes"](around.v:${lim});node["playground"~"^(sandpit|baby_swing|swing|springy|playhouse|slide)$"](around.v:60););out tags center qt;(nwr["leisure"~"^(park|garden|recreation_ground|common|nature_reserve|pitch)$"]["name"](around.v:150);nwr["landuse"~"^(recreation_ground|village_green|grass)$"]["name"](around.v:150);nwr["amenity"~"^(school|place_of_worship)$"]["name"](around.v:60);nwr["landuse"="residential"]["name"](around.v:50););out tags center bb qt;node["place"~"^(suburb|neighbourhood|quarter|village|town|hamlet)$"](around.v:3000);out tags qt;`;
+};
+/* One cached download, reused when the new search is the same spot with an equal or smaller radius. */
+const cacheGet = (c, R) => { try { const h = JSON.parse(localStorage.getItem('hf-osm')); if (h && Date.now() - h.t < 3 * 864e5 && h.r >= R && dist(c, h) < 150) return h.e; } catch {} return null; };
+const cachePut = (c, R, e) => { try { localStorage.removeItem('hf-osm'); const str = JSON.stringify({ t: Date.now(), lat: c.lat, lon: c.lon, r: R, e }); if (str.length < 4e6) localStorage.setItem('hf-osm', str); } catch {} };
 /* Spatial grid so matching thousands of playgrounds to thousands of cafés stays fast on a phone. */
 function grid(arr) {
   const C = 0.005, m = new Map(), key = (i, j) => i + ',' + j;
@@ -290,8 +301,8 @@ function build(els, c) {
     const away = dist(c, p); if (away > S.radius) continue;
     const key = kind + Math.round(p.lat * 4000) + ',' + Math.round(p.lon * 4000); if (seen.has(key)) continue; seen.add(key);
     const cafe = gCafe(p, lim)[0] || null, loo = gLoo(p, lim)[0] || null;
-    const cafeS = cafe ? 'ok' : kind === 'softplay' ? 'may' : 'no';
-    const looS = t.toilets === 'yes' || loo ? 'ok' : (cafe || kind !== 'playground') ? 'may' : 'no';
+    const cafeS = S.partial ? 'wait' : cafe ? 'ok' : kind === 'softplay' ? 'may' : 'no';
+    const looS = S.partial ? 'wait' : t.toilets === 'yes' || loo ? 'ok' : (cafe || kind !== 'playground') ? 'may' : 'no';
     const sig = [];
     if (kind === 'playground') {
       const items = gKit(p, 70).map(o => o.x.t);
@@ -325,6 +336,7 @@ function build(els, c) {
 /* ---------- rendering ---------- */
 const avg = arr => { const v = arr.map(r => +r.overall).filter(n => n > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 function ticks(p) {
+  if (p.cafeS === 'wait') return '<span class="t may">Checking café &amp; toilet…</span>';
   const c = p.cafeS === 'ok' ? `<span class="t ok">Café ${mins(p.cafe.d)} min</span>` : p.cafeS === 'may' ? '<span class="t may">Café usually inside</span>' : '<span class="t no">No café nearby</span>';
   const l = p.looS === 'ok' ? `<span class="t ok">Toilet ${p.loo ? mins(p.loo.d) + ' min' : 'on site'}</span>` : p.looS === 'may' ? `<span class="t may">Toilet likely (${p.kind === 'playground' ? 'in café' : 'inside'})</span>` : '<span class="t no">No toilet found</span>';
   const k = p.kind !== 'playground' ? '' : p.sig.length ? `<span class="t ok">${esc(p.sig.slice(0, 2).join(', '))}</span>` : '<span class="t may">Toddler kit unknown</span>';
@@ -362,7 +374,7 @@ function initMap() {
   map.on('baselayerchange', () => { fails = 0; });
   const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
   const saved = LS.get('hf-style', null);
-  (STYLES[saved] || STYLES[dark ? 'Dark' : 'Standard']).addTo(map);
+  (STYLES[saved] || STYLES[dark ? 'Dark' : 'Light']).addTo(map);
   L.control.layers(STYLES, null, { position: 'topright' }).addTo(map);
   map.on('baselayerchange', e => LS.set('hf-style', e.name));
   map.attributionControl.setPosition('topright'); map.attributionControl.setPrefix(false);
@@ -446,11 +458,20 @@ async function renderGroups() {
 }
 
 /* ---------- actions ---------- */
+function rebuild() { S.places = build(S.els || [], S.center); renderList(); }
 async function go(center, label) {
-  S.center = center; S.shown = 100; S.fit = true; setSnap('half'); LS.set('hf-last', { center, label, radius: S.radius, walk: S.walk });
-  setStatus('Finding playgrounds, cafés and toilets around ' + (label || 'you') + (S.radius > 10000 ? '… a big radius can take up to a minute.' : '…')); $('#list').innerHTML = '';
-  try { const [els, ratings] = await Promise.all([fetchOSM(center), Store.allRatings().catch(e => { S.dbErr = e.message; return {}; })]); S.ratings = ratings; S.places = build(els, center); renderList(); scroller.scrollTop = 0; if (S.dbErr) { $('#status').insertAdjacentText('beforeend', ' · Ratings unavailable: ' + S.dbErr); S.dbErr = ''; } renderGroups(); }
-  catch (e) { $('#status').textContent = e.message || 'Something went wrong loading places.'; }
+  const req = S.req = (S.req || 0) + 1, R = S.radius, live = () => req === S.req;
+  S.center = center; S.label = label; S.shown = 100; S.fit = true; setSnap('half'); LS.set('hf-last', { center, label, radius: R, walk: S.walk });
+  if (!S.ratingsLoaded) { S.ratingsLoaded = true; Store.allRatings().then(r => { S.ratings = r; if (S.els) renderList(); }).catch(e => $('#status').insertAdjacentText('beforeend', ' · ratings unavailable: ' + e.message)); }
+  renderGroups();
+  const hit = cacheGet(center, R);
+  if (hit) { S.els = hit; S.partial = false; rebuild(); scroller.scrollTop = 0; return; }
+  S.els = null; $('#list').innerHTML = '';
+  setStatus('Finding places around ' + (label || 'you') + '…');
+  const full = overpass(fullQ(center, R));
+  overpass(quickQ(center, R)).then(e => { if (live() && !S.els) { S.els = e; S.partial = true; rebuild(); $('#status').insertAdjacentHTML('beforeend', '<span class="sub"> · checking cafés and toilets…</span>'); } }).catch(() => {});
+  try { const e = await full; if (!live()) return; S.els = e; S.partial = false; rebuild(); cachePut(center, R, e); }
+  catch (err) { if (!live()) return; if (S.els) $('#status').insertAdjacentText('beforeend', ' · café/toilet check failed, try again soon'); else setStatus(err.message); }
 }
 async function geocode(q) {
   // UK postcodes → postcodes.io (fast, reliable); anything else → Photon, then Nominatim
@@ -517,9 +538,9 @@ const coverBottom = () => mq.matches ? pane.offsetHeight - curY() : 0; // px of 
 
 $('#searchForm').addEventListener('submit', async e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; setStatus('Looking up ' + q + '…'); try { const g = await geocode(q); go(g.center, g.label); } catch (err) { $('#status').textContent = err.message; } });
 $('#locate').addEventListener('click', () => { if (!navigator.geolocation) { $('#status').textContent = 'Location isn’t available here — search instead.'; return; } $('#status').textContent = 'Finding you…'; navigator.geolocation.getCurrentPosition(p => go({ lat: p.coords.latitude, lon: p.coords.longitude }, 'you'), () => { $('#status').textContent = 'Location was blocked — search a town or postcode instead.'; }, { timeout: 10000 }); });
-$('#radius').addEventListener('change', e => { S.radius = +e.target.value; if (S.center) go(S.center); });
+$('#radius').addEventListener('change', e => { S.radius = +e.target.value; if (S.center) go(S.center, S.label); });
 $('#sort').addEventListener('change', e => { S.sort = e.target.value; S.shown = 100; renderList(); });
-$('#walk').addEventListener('change', e => { S.walk = +e.target.value; if (S.center) go(S.center); });
+$('#walk').addEventListener('change', e => { S.walk = +e.target.value; LS.set('hf-last', { ...LS.get('hf-last', {}), walk: S.walk }); if (S.els) rebuild(); });
 $('#filters').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; S.filter = b.dataset.f; S.shown = 100; S.fit = true; document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b)); renderList(); });
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.t)));
 $('#list').addEventListener('click', e => { if (e.target.closest('[data-more]')) { S.shown += 100; renderList(); return; } const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
