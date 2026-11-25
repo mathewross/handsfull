@@ -8,24 +8,6 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito+Sans:wght@400;700;800&display=swap" rel="stylesheet">
-<!--
-  HANDS FULL — prototype
-  Data: OpenStreetMap via Overpass (venues, cafés, toilets, playground equipment), Nominatim (place search).
-  Reviews + community groups: saved in this browser by default.
-  To share them between all users, create a free Supabase project, run the SQL below, and fill CFG in the script.
-
-  create table reviews (id bigint generated always as identity primary key, place_id text not null,
-    overall int, solo int, feeding int, clean int, value int, buggy int, comment text,
-    created_at timestamptz default now());
-  create table groups (id bigint generated always as identity primary key, name text not null, kind text,
-    schedule text, place text, cost text, link text, source text, notes text, lat float8, lon float8,
-    created_at timestamptz default now());
-  alter table reviews enable row level security; alter table groups enable row level security;
-  create policy "read reviews" on reviews for select using (true);
-  create policy "add reviews" on reviews for insert with check (true);
-  create policy "read groups" on groups for select using (true);
-  create policy "add groups" on groups for insert with check (true);
--->
 <style>
 /* VOICE: warm, practical, calm — a friend who's done the recce for you
    IDEA: a park noticeboard crossed with a checklist: three ticks per place
@@ -42,29 +24,63 @@ button{cursor:pointer}
 :focus-visible{outline:3px solid var(--coral);outline-offset:2px}
 .top{background:var(--green);color:#fff;padding:18px max(4vw,16px) 0}
 .brand{display:flex;gap:12px;align-items:center;max-width:1240px;margin:0 auto}
+.brand .name{flex:1}
 .brand h1{font-size:clamp(30px,5vw,44px);font-weight:800}
 .brand p{margin:0;opacity:.85;font-size:15px}
 .controls{max-width:1240px;margin:14px auto 0;display:grid;gap:10px;padding-bottom:14px}
 .searchrow{display:flex;gap:8px;flex-wrap:wrap}
 .searchrow input{flex:1 1 220px;min-height:46px;border:0;border-radius:12px;padding:0 14px;background:#fff;color:#14271f}
-.btn{min-height:46px;border:0;border-radius:12px;padding:0 16px;font-weight:800;background:var(--coral);color:#1b0d08}
+.btn{min-height:46px;border:0;border-radius:12px;padding:0 16px;font-weight:800;background:var(--coral);color:#1b0d08;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.searchrow .btn{flex:none}
+#optBtn{display:none}
 .btn.ghost{background:rgba(255,255,255,.14);color:#fff}
 .btn.plain{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 .opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px}
 .opts select{min-height:40px;border-radius:10px;border:0;padding:0 8px;background:rgba(255,255,255,.14);color:#fff}
 .opts select option{color:#14271f}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{flex:none}
 .chip{min-height:40px;border-radius:99px;padding:0 14px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;font-weight:700;font-size:14px}
 .chip[aria-pressed=true]{background:#fff;color:var(--green)}
-.tabs{display:flex;gap:4px;max-width:1240px;margin:0 auto}
-.tab{flex:1;min-height:46px;border:0;border-radius:12px 12px 0 0;background:transparent;color:#fff;font-weight:800}
-.tab[aria-selected=true]{background:var(--bg);color:var(--ink)}
-main{max-width:1240px;margin:0 auto;padding:14px max(4vw,16px) 40px}
-.split{display:grid;gap:16px}
-#mapPane{height:calc(100dvh - 260px);min-height:380px;border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+.tabs{display:flex;gap:2px;background:rgba(0,0,0,.18);border-radius:99px;padding:3px;flex:none}
+.tab{min-height:40px;border:0;border-radius:99px;padding:0 16px;background:transparent;color:#fff;font-weight:800;font-size:15px}
+.tab[aria-selected=true]{background:#fff;color:var(--green)}
+main{max-width:1240px;margin:0 auto;padding:16px max(4vw,16px) 40px}
+body[data-tab=groups] .stage,body[data-tab=places] #groupsPane{display:none}
 #map{height:100%}
-body[data-tab=list] #mapPane,body[data-tab=list] #groupsPane,body[data-tab=map] #listPane,body[data-tab=map] #groupsPane,body[data-tab=groups] .split{display:none}
-@media(min-width:900px){.tab[data-t=map]{display:none}.split{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)}body[data-tab=list] #mapPane,body[data-tab=map] #listPane{display:block}#mapPane{position:sticky;top:12px}#listPane{max-height:calc(100dvh - 240px);overflow:auto;padding-right:4px}}
+.grab{padding:4px 0 10px}.handle{display:none}
+.mapBtn{display:none}
+/* wide screens: list beside a sticky map */
+@media(min-width:900px){
+  .stage{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:16px}
+  #listPane{order:1;max-height:calc(100dvh - 210px);overflow:auto;padding-right:4px}
+  #mapPane{order:2;position:sticky;top:12px;height:calc(100dvh - 210px);min-height:380px;border-radius:16px;overflow:hidden;border:1px solid var(--line)}
+}
+/* phones: full-screen map with a draggable list sheet (peek / half / full) */
+@media(max-width:899px){
+  .top{padding-top:10px}
+  .brand svg{width:34px;height:34px;flex:none}.brand h1{font-size:26px;white-space:nowrap}.brand p{display:none}
+  .controls{margin-top:10px;gap:8px;padding-bottom:10px}
+  .searchrow{flex-wrap:nowrap}.searchrow input{flex:1 1 auto}
+  .searchrow .btn{padding:0;width:46px}.lbl{display:none}
+  #optBtn{display:inline-flex}
+  .opts{display:none}.top.showopts .opts{display:flex}
+  .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 calc(-1 * max(4vw,16px));padding:0 max(4vw,16px)}
+  .chips::-webkit-scrollbar{display:none}
+  body[data-tab=places]{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+  body[data-tab=places] main{flex:1;position:relative;max-width:none;padding:0;width:100%}
+  .stage{position:absolute;inset:0;z-index:0;overflow:hidden}
+  #mapPane{position:absolute;inset:0;z-index:0}
+  #listPane{position:absolute;inset:0;z-index:1;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;will-change:transform}
+  #listPane.anim{transition:transform .32s cubic-bezier(.2,.8,.2,1)}
+  .grab{padding:8px 16px 12px;touch-action:none;cursor:grab;flex:none}
+  .handle{display:block;width:44px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 10px}
+  .grab .status{text-align:center;margin:0;font-size:16px}.grab .status .sub{display:none}
+  .listScroll{flex:1;overflow:hidden;padding:0 16px 110px;overscroll-behavior:contain}
+  body.full .listScroll{overflow-y:auto}
+  .mapBtn{display:inline-flex;align-items:center;gap:8px;position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(140%);z-index:2;min-height:48px;padding:0 22px;border:0;border-radius:99px;background:#14271f;color:#fff;font-weight:800;box-shadow:0 6px 18px rgba(0,0,0,.3);transition:transform .25s,opacity .2s;opacity:0;pointer-events:none}
+  body.full .mapBtn{transform:translateX(-50%);opacity:1;pointer-events:auto}
+}
 .status{color:var(--mute);font-size:15px;margin:0 0 10px}
 .status b{color:var(--ink)}
 ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
@@ -108,21 +124,27 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
 @media(prefers-reduced-motion:no-preference){.card{transition:border-color .15s,transform .15s}.card:active{transform:scale(.99)}}
 </style>
 </head>
-<body data-tab="list">
+<body data-tab="places">
 <header class="top">
   <div class="brand">
     <svg width="48" height="48" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="24" fill="#ff6b4a"/><circle cx="18" cy="17" r="6" fill="#fff"/><path d="M9 38c0-7 4-12 9-12s9 5 9 12z" fill="#fff"/><circle cx="32" cy="24" r="4" fill="#1f5c45"/><path d="M26 38c0-5 3-8 6-8s6 3 6 8z" fill="#1f5c45"/></svg>
-    <div><h1>Hands Full</h1><p>Places that work with a toddler <em>and</em> a newborn.</p></div>
+    <div class="name"><h1>Hands Full</h1><p>Places that work with a toddler <em>and</em> a newborn.</p></div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-t="places" aria-selected="true">Places</button>
+      <button class="tab" role="tab" data-t="groups" aria-selected="false">Groups</button>
+    </nav>
   </div>
   <form class="controls" id="searchForm">
     <div class="searchrow">
       <input id="q" type="search" placeholder="Town, postcode or area" aria-label="Search a place" autocomplete="off">
-      <button class="btn" type="submit">Search</button>
-      <button class="btn ghost" type="button" id="locate">Near me</button>
+      <button class="btn" type="submit" aria-label="Search"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><span class="lbl">Search</span></button>
+      <button class="btn ghost" type="button" id="locate" aria-label="Near me"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="lbl">Near me</span></button>
+      <button class="btn ghost" type="button" id="optBtn" aria-label="Options" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="10" cy="17" r="2.4" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
     </div>
     <div class="opts">
-      <label>Within <select id="radius"><option value="1000">1 km</option><option value="2000" selected>2 km</option><option value="3000">3 km</option><option value="5000">5 km</option></select></label>
+      <label>Within <select id="radius"><option value="2000">2 km</option><option value="5000">5 km</option><option value="10000">10 km</option><option value="15000" selected>15 km</option><option value="20000">20 km</option></select></label>
       <label>Café/toilet within <select id="walk"><option value="5">5 min walk</option><option value="8" selected>8 min walk</option><option value="12">12 min walk</option></select></label>
+      <label>Sort <select id="sort"><option value="best">Best match</option><option value="near">Nearest</option></select></label>
     </div>
     <div class="chips" id="filters">
       <button type="button" class="chip" data-f="all" aria-pressed="true">Everything</button>
@@ -132,17 +154,16 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
       <button type="button" class="chip" data-f="venue" aria-pressed="false">Libraries &amp; halls</button>
     </div>
   </form>
-  <nav class="tabs" role="tablist">
-    <button class="tab" role="tab" data-t="list" aria-selected="true">List</button>
-    <button class="tab" role="tab" data-t="map" aria-selected="false">Map</button>
-    <button class="tab" role="tab" data-t="groups" aria-selected="false">Groups &amp; classes</button>
-  </nav>
 </header>
 
 <main>
-  <div class="split">
-    <section id="listPane"><p class="status" id="status"></p><ul id="list"></ul></section>
+  <div class="stage" id="stage">
     <section id="mapPane"><div id="map"></div></section>
+    <section id="listPane" aria-label="Places list">
+      <div class="grab" id="grab"><span class="handle" aria-hidden="true"></span><p class="status" id="status"></p></div>
+      <div class="listScroll" id="listScroll"><ul id="list"></ul></div>
+    </section>
+    <button class="mapBtn" id="mapBtn" type="button">Map <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
   </div>
   <section id="groupsPane">
     <p class="status">Playgroups, rhyme times, baby classes and church groups often only live on Facebook, Instagram or a noticeboard. Add the ones you know so other parents can find them.</p>
@@ -174,11 +195,10 @@ textarea,.field input,.field select{width:100%;min-height:46px;border-radius:10p
 /* Fill these to share reviews and groups between everyone (see SQL at the top). Empty = saved in this browser only. */
 const CFG = { supabaseUrl: 'https://wztwjowegmzthleqttai.supabase.co', supabaseKey: 'sb_publishable_anXcnFg0Lf7RB_ijRrK40A_6VdSQTqQ' }; // e.g. 'https://abcd.supabase.co' and the publishable (sb_publishable_…) or anon key — both are safe to be public
 
-const OVERPASS = 'https://overpass-api.de/api/interpreter';
 const M_PER_MIN = 67, DETOUR = 1.3; // ~4 km/h with a buggy; straight line × 1.3 ≈ walking route
 const METRICS = [['overall','Overall'],['solo','Toddler can play mostly solo'],['feeding','Comfy spot to feed baby'],['clean','Cleanliness'],['value','Value for money'],['buggy','Buggy access']];
 const KIND = { playground: 'Playground', softplay: 'Soft play', venue: 'Library / hall' };
-const S = { center: null, places: [], filter: 'all', radius: 2000, walk: 8, ratings: {} };
+const S = { center: null, places: [], filter: 'all', sort: 'best', shown: 100, radius: 15000, walk: 8, ratings: {} };
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -192,8 +212,10 @@ const dirUrl = p => `https://www.google.com/maps/dir/?api=1&travelmode=walking&d
 const LS = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const shared = () => !!(CFG.supabaseUrl && CFG.supabaseKey);
 const sb = async (path, opt = {}) => {
-  const r = await fetch(CFG.supabaseUrl + '/rest/v1/' + path, { ...opt, headers: { apikey: CFG.supabaseKey, ...(CFG.supabaseKey.startsWith('eyJ') ? { Authorization: 'Bearer ' + CFG.supabaseKey } : {}), 'Content-Type': 'application/json', Prefer: 'return=minimal' } });
-  if (!r.ok) throw new Error('Could not reach the reviews server');
+  let r;
+  try { r = await fetch(CFG.supabaseUrl.replace(/\/+$/, '') + '/rest/v1/' + path, { ...opt, headers: { apikey: CFG.supabaseKey, ...(CFG.supabaseKey.startsWith('eyJ') ? { Authorization: 'Bearer ' + CFG.supabaseKey } : {}), 'Content-Type': 'application/json', Prefer: 'return=minimal' } }); }
+  catch { throw new Error('Couldn’t reach the reviews database — check the Supabase URL in CFG.'); }
+  if (!r.ok) { let m = ''; try { m = (await r.json()).message || ''; } catch {} throw new Error(`Reviews database said ${r.status}${m ? ': ' + m : ''}${r.status === 401 ? ' (check the key in CFG)' : r.status === 404 ? ' (have the tables been created?)' : ''}`); }
   return opt.method ? null : r.json();
 };
 const Store = {
@@ -205,21 +227,52 @@ const Store = {
 };
 
 /* ---------- data: OpenStreetMap ---------- */
+/* Public Overpass servers: tried in order, because any one of them can be busy. */
+const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const setStatus = t => { $('#status').textContent = t; };
 async function fetchOSM(c) {
-  const a = `(around:${S.radius},${c.lat},${c.lon})`, b = `(around:${S.radius + 900},${c.lat},${c.lon})`;
-  const q = `[out:json][timeout:40];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};nwr["leisure"="park"]["name"]${b};nwr["amenity"="cafe"]${b};nwr["amenity"="toilets"]${b};nwr["toilets"="yes"]${b};node["playground"]${b};);out center tags;`;
-  const r = await fetch(OVERPASS, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-  if (!r.ok) throw new Error(`The map data server is busy (${r.status}). Try again in a minute.`);
-  return (await r.json()).elements;
+  // 1) venues in the search radius → set .v   2) cafés, toilets, park names and play kit only around those venues
+  const lim = Math.round(S.walk * M_PER_MIN / DETOUR) + 50, a = `(around:${S.radius},${c.lat},${c.lon})`;
+  const q = `[out:json][timeout:90][maxsize:536870912];(nwr["leisure"="playground"]${a};nwr["leisure"="indoor_play"]${a};nwr["amenity"~"^(library|community_centre)$"]${a};)->.v;.v out tags center qt;(nwr["amenity"="cafe"](around.v:${lim});nwr["amenity"="toilets"](around.v:${lim});nwr["toilets"="yes"](around.v:${lim});node["playground"~"^(sandpit|baby_swing|swing|springy|playhouse|slide)$"](around.v:60););out tags center qt;(nwr["leisure"~"^(park|garden|recreation_ground|common|nature_reserve|pitch)$"]["name"](around.v:150);nwr["landuse"~"^(recreation_ground|village_green|grass)$"]["name"](around.v:150);nwr["amenity"~"^(school|place_of_worship)$"]["name"](around.v:60);nwr["landuse"="residential"]["name"](around.v:50););out tags center bb qt;node["place"~"^(suburb|neighbourhood|quarter|village|town|hamlet)$"](around.v:3000);out tags qt;`;
+  let why = '';
+  for (const url of MIRRORS) {
+    const host = new URL(url).hostname, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 100000);
+    try {
+      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+      if (!r.ok) throw new Error(r.status === 429 ? 'too many requests' : r.status >= 500 ? 'server overloaded' : 'error ' + r.status);
+      const j = await r.json();
+      if (j.remark && /error|timed out|out of memory/i.test(j.remark)) throw new Error('query too big for the server');
+      return j.elements;
+    } catch (e) {
+      why = e.name === 'AbortError' ? 'timed out' : e.message === 'Failed to fetch' || e.name === 'TypeError' ? 'no response' : e.message;
+      setStatus(`Map server ${host}: ${why}. Trying another…`);
+    } finally { clearTimeout(timer); }
+  }
+  throw new Error(`Couldn’t load map data from any server (last one: ${why}). Try a smaller radius, or again in a minute.`);
+}
+/* Spatial grid so matching thousands of playgrounds to thousands of cafés stays fast on a phone. */
+function grid(arr) {
+  const C = 0.005, m = new Map(), key = (i, j) => i + ',' + j;
+  for (const p of arr) { const k = key(Math.floor(p.lat / C), Math.floor(p.lon / C)); (m.get(k) || m.set(k, []).get(k)).push(p); }
+  return (p, max) => {
+    const i0 = Math.floor(p.lat / C), j0 = Math.floor(p.lon / C), ri = Math.ceil(max / (C * 111320)), rj = Math.ceil(max / (C * 111320 * Math.cos(p.lat * Math.PI / 180)));
+    const out = [];
+    for (let i = i0 - ri; i <= i0 + ri; i++) for (let j = j0 - rj; j <= j0 + rj; j++) { const b = m.get(key(i, j)); if (b) for (const x of b) { if (x.id === p.id) continue; const d = dist(p, x); if (d <= max) out.push({ x, d }); } }
+    return out.sort((a, b) => a.d - b.d);
+  };
 }
 
 function build(els, c) {
-  const pts = els.map(e => ({ id: e.type[0] + e.id, t: e.tags || {}, lat: e.lat ?? e.center?.lat, lon: e.lon ?? e.center?.lon })).filter(p => p.lat != null);
+  const pts = els.map(e => ({ id: e.type[0] + e.id, t: e.tags || {}, lat: e.lat ?? e.center?.lat, lon: e.lon ?? e.center?.lon, bb: e.bounds })).filter(p => p.lat != null);
   const cafes = pts.filter(p => p.t.amenity === 'cafe');
   const loos = pts.filter(p => (p.t.amenity === 'toilets' && !['private', 'no', 'customers'].includes(p.t.access)) || p.t.toilets === 'yes');
-  const parks = pts.filter(p => p.t.leisure === 'park');
+  const areas = pts.filter(p => p.bb && p.t.name && !p.t.amenity?.match(/cafe|toilets|library|community_centre/) && p.t.leisure !== 'playground' && p.t.leisure !== 'indoor_play');
+  const places = pts.filter(p => p.t.place && p.t.name);
+  const inside = (p, a, m = 0.0004) => p.lat >= a.bb.minlat - m && p.lat <= a.bb.maxlat + m && p.lon >= a.bb.minlon - m && p.lon <= a.bb.maxlon + m;
+  const bbArea = a => (a.bb.maxlat - a.bb.minlat) * (a.bb.maxlon - a.bb.minlon);
+  const PREP = { park: '', garden: '', recreation_ground: '', common: '', nature_reserve: '', pitch: 'by ', school: 'by ', place_of_worship: 'by ', residential: '' };
   const kit = pts.filter(p => p.t.playground && !p.t.leisure);
-  const nearest = (p, arr, max) => { let best = null; for (const x of arr) { if (x.id === p.id) continue; const d = dist(p, x); if (d <= max && (!best || d < best.d)) best = { x, d }; } return best; };
+  const gCafe = grid(cafes), gLoo = grid(loos), gArea = grid(areas), gPlace = grid(places), gKit = grid(kit);
   const lim = S.walk * M_PER_MIN / DETOUR, seen = new Set(), out = [];
   for (const p of pts) {
     const t = p.t; let kind = null;
@@ -229,12 +282,12 @@ function build(els, c) {
     if (!kind) continue;
     const away = dist(c, p); if (away > S.radius) continue;
     const key = kind + Math.round(p.lat * 4000) + ',' + Math.round(p.lon * 4000); if (seen.has(key)) continue; seen.add(key);
-    const cafe = nearest(p, cafes, lim), loo = nearest(p, loos, lim);
+    const cafe = gCafe(p, lim)[0] || null, loo = gLoo(p, lim)[0] || null;
     const cafeS = cafe ? 'ok' : kind === 'softplay' ? 'may' : 'no';
     const looS = t.toilets === 'yes' || loo ? 'ok' : (cafe || kind !== 'playground') ? 'may' : 'no';
     const sig = [];
     if (kind === 'playground') {
-      const items = kit.filter(k => dist(p, k) < 70).map(k => k.t);
+      const items = gKit(p, 70).map(o => o.x.t);
       const has = f => items.some(f);
       if (t.fenced === 'yes' || t.barrier === 'fence') sig.push('fenced');
       if (+t.min_age <= 2 || +t.max_age && +t.max_age <= 6 || /toddler|baby|infant/i.test(t.name || '')) sig.push('toddler area');
@@ -245,9 +298,18 @@ function build(els, c) {
       if (t.surface && /rubber|tartan|grass|woodchips|bark/.test(t.surface)) sig.push('soft surface');
     }
     let name = t.name;
-    if (!name && kind === 'playground') { const pk = nearest(p, parks, 350); name = pk ? 'Playground, ' + pk.x.t.name : 'Playground (unnamed)'; }
+    if (!name && kind === 'playground') {
+      // smallest named green space / school / estate that contains it, else the street, else the neighbourhood
+      const box = gArea(p, 3000).map(o => o.x).filter(a => inside(p, a)).sort((a, b) => bbArea(a) - bbArea(b))[0];
+      const pl = gPlace(p, 3000)[0];
+      if (box) { const ty = box.t.leisure || box.t.amenity || box.t.landuse; name = 'Playground, ' + (PREP[ty] || '') + box.t.name; }
+      else if (t['addr:street']) name = 'Playground, ' + t['addr:street'];
+      else if (pl) name = 'Playground near ' + pl.x.t.name;
+      else name = 'Playground';
+    }
+    { const pl = gPlace(p, 3000)[0]; if (pl && !name.toLowerCase().includes(pl.x.t.name.toLowerCase())) p.area = pl.x.t.name; }
     name = name || KIND[kind];
-    const score = (cafeS === 'ok' ? 3 : cafeS === 'may' ? 2 : 0) + (looS === 'ok' ? 3 : looS === 'may' ? 1.5 : 0) + Math.min(sig.length, 3) - away / 1500;
+    const score = (cafeS === 'ok' ? 3 : cafeS === 'may' ? 2 : 0) + (looS === 'ok' ? 3 : looS === 'may' ? 1.5 : 0) + Math.min(sig.length, 3) - away / 4000;
     out.push({ ...p, kind, name, away, cafe, loo, cafeS, looS, sig, score });
   }
   return out.sort((a, b) => b.score - a.score);
@@ -261,13 +323,13 @@ function ticks(p) {
   const k = p.kind !== 'playground' ? '' : p.sig.length ? `<span class="t ok">${esc(p.sig.slice(0, 2).join(', '))}</span>` : '<span class="t may">Toddler kit unknown</span>';
   return c + l + k;
 }
-const visible = () => S.places.filter(p => S.filter === 'all' ? true : S.filter === 'match' ? p.cafeS !== 'no' && p.looS !== 'no' : p.kind === S.filter);
+const visible = () => { const v = S.places.filter(p => S.filter === 'all' ? true : S.filter === 'match' ? p.cafeS !== 'no' && p.looS !== 'no' : p.kind === S.filter); return S.sort === 'near' ? v.slice().sort((a, b) => a.away - b.away) : v; };
 
 function renderList() {
   const list = visible(), ul = $('#list');
   if (!S.center) { ul.innerHTML = `<li class="empty"><h2>Where are you heading?</h2>Search a town or postcode, or tap <b>Near me</b>. Each place gets three checks: a café to sit and feed, a toilet for the toddler, and play they can mostly manage alone.</li>`; $('#status').textContent = ''; return; }
-  $('#status').innerHTML = `<b>${list.length}</b> place${list.length === 1 ? '' : 's'} · best matches first · data from OpenStreetMap`;
-  ul.innerHTML = list.length ? list.map(p => { const a = avg(S.ratings[p.id] || []); return `<li><button class="card" data-id="${esc(p.id)}"><span class="kind">${KIND[p.kind]} · ${km(p.away)} away</span><h3>${esc(p.name)}</h3><span class="ticks">${ticks(p)}</span>${a ? `<span class="stars">★ ${a.toFixed(1)} from parents</span>` : ''}</button></li>`; }).join('')
+  $('#status').innerHTML = `<b>${list.length.toLocaleString()} place${list.length === 1 ? '' : 's'}</b><span class="sub"> · ${S.sort === 'near' ? 'nearest' : 'best matches'} first · data from OpenStreetMap</span>`;
+  ul.innerHTML = list.length ? list.slice(0, S.shown).map(p => { const a = avg(S.ratings[p.id] || []); return `<li><button class="card" data-id="${esc(p.id)}"><span class="kind">${KIND[p.kind]}${p.area ? ' · ' + esc(p.area) : ''} · ${km(p.away)} away</span><h3>${esc(p.name)}</h3><span class="ticks">${ticks(p)}</span>${a ? `<span class="stars">★ ${a.toFixed(1)} from parents</span>` : ''}</button></li>`; }).join('') + (list.length > S.shown ? `<li><button class="btn plain" style="width:100%" data-more>Show ${Math.min(100, list.length - S.shown)} more of ${list.length - S.shown}</button></li>` : '')
     : '<li class="empty">Nothing matches this filter here. Try a bigger radius or a longer walk.</li>';
   drawMarkers(list);
 }
@@ -275,23 +337,45 @@ function renderList() {
 let map, layer, here;
 function initMap() {
   if (!window.L) { $('#mapPane').innerHTML = '<p class="empty">The map could not load. The list still works.</p>'; return; }
-  map = L.map('map').setView([51.505, -0.12], 12);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+  map = L.map('map', { preferCanvas: true }).setView([51.505, -0.12], 12);
+  const osm = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', carto = osm + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  const STYLES = {
+    'Soft colour': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
+    'Light': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
+    'Dark': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 20, subdomains: 'abcd', attribution: carto }),
+    'Detailed (OSM)': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: osm }),
+    'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' })
+  };
+  const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+  const saved = LS.get('hf-style', null);
+  (STYLES[saved] || STYLES[dark ? 'Dark' : 'Soft colour']).addTo(map);
+  L.control.layers(STYLES, null, { position: 'topright' }).addTo(map);
+  map.on('baselayerchange', e => LS.set('hf-style', e.name));
+  map.attributionControl.setPosition('topright');
+  map.on('dragstart', () => { if (mq.matches && S.snap === 'half') setSnap('peek'); });
   layer = L.layerGroup().addTo(map);
 }
 function drawMarkers(list) {
   if (!map) return;
-  layer.clearLayers();
+  layer.clearLayers(); S.mk = {}; S.sel = null;
   if (here) here.remove();
   here = L.circleMarker([S.center.lat, S.center.lon], { radius: 7, color: '#fff', weight: 3, fillColor: '#2b6cff', fillOpacity: 1 }).addTo(map);
   const pts = list.map(p => {
     const good = p.cafeS !== 'no' && p.looS !== 'no';
-    L.circleMarker([p.lat, p.lon], { radius: good ? 10 : 7, color: '#fff', weight: 2, fillColor: good ? '#ff6b4a' : '#7b8f86', fillOpacity: .95 })
-      .bindTooltip(p.name).on('click', () => openPlace(p.id)).addTo(layer);
+    const st = { radius: good ? 10 : 7, color: '#fff', weight: 2, fillColor: good ? '#ff6b4a' : '#7b8f86', fillOpacity: .95 };
+    S.mk[p.id] = { m: L.circleMarker([p.lat, p.lon], st).bindTooltip(p.name).on('click', () => openPlace(p.id)).addTo(layer), st };
     return [p.lat, p.lon];
   });
   pts.push([S.center.lat, S.center.lon]);
-  map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
+  if (S.fit) { map.fitBounds(pts, { paddingTopLeft: [30, 30], paddingBottomRight: [30, 30 + coverBottom()], maxZoom: 15 }); S.fit = false; }
+}
+function focusPlace(p) {
+  if (!map) return;
+  if (S.sel && S.mk[S.sel]) S.mk[S.sel].m.setStyle(S.mk[S.sel].st).setRadius(S.mk[S.sel].st.radius);
+  const k = S.mk[p.id]; S.sel = p.id;
+  if (k) k.m.setStyle({ fillColor: '#1f5c45', color: '#ff6b4a', weight: 4 }).setRadius(14).bringToFront();
+  const z = Math.max(map.getZoom(), 16), pt = map.project([p.lat, p.lon], z).add([0, coverBottom() / 2]);
+  map.setView(map.unproject(pt, z), z, { animate: true });
 }
 
 async function openPlace(id) {
@@ -302,10 +386,10 @@ async function openPlace(id) {
   const looLine = p.loo ? `<b>Toilet:</b> ${esc(p.loo.x.t.name || (p.loo.x.t.amenity === 'toilets' ? 'Public toilet' : 'Toilets at ' + (p.loo.x.t.amenity || 'venue')))} — ${mins(p.loo.d)} min walk${p.loo.x.t.changing_table === 'yes' ? ' · baby change' : ''}${p.loo.x.t.fee === 'yes' ? ' · paid' : ''} · <a href="${dirUrl(p.loo.x)}" target="_blank" rel="noopener">directions</a>` : p.looS === 'ok' ? '<b>Toilet:</b> on site.' : p.looS === 'may' ? `<b>Toilet:</b> none mapped, but ${p.kind === 'playground' ? 'the café nearby probably has one' : 'venues like this usually do'}.` : `<b>Toilet:</b> none mapped within ${S.walk} min walk.`;
   const kidLine = p.kind === 'playground' ? `<b>For the toddler:</b> ${p.sig.length ? esc(p.sig.join(', ')) : 'no equipment details mapped yet — a rating below helps the next parent'}` : '';
   $('#sheet').innerHTML = `<button class="close" aria-label="Close" data-close>×</button>
-    <span class="kind">${KIND[p.kind]} · ${km(p.away)} away</span><h2 id="sheetTitle">${esc(p.name)}</h2>
+    <span class="kind">${KIND[p.kind]}${p.area ? ' · ' + esc(p.area) : ''} · ${km(p.away)} away</span><h2 id="sheetTitle">${esc(p.name)}</h2>
     ${addr ? `<p class="note">${esc(addr)}</p>` : ''}
     <div class="facts"><div class="fact">${cafeLine}</div><div class="fact">${looLine}</div>${kidLine ? `<div class="fact">${kidLine}</div>` : ''}${t.opening_hours ? `<div class="fact"><b>Opening hours:</b> ${esc(t.opening_hours)}</div>` : ''}</div>
-    <div class="links"><a href="${dirUrl(p)}" target="_blank" rel="noopener">Walking directions</a>${site ? `<a href="${esc(site)}" target="_blank" rel="noopener">Website</a>` : ''}${p.kind === 'venue' ? '<a href="#" data-addgroup>Add a group here</a>' : ''}</div>
+    <div class="links"><a href="#" data-showmap>Show on map</a><a href="${dirUrl(p)}" target="_blank" rel="noopener">Walking directions</a>${site ? `<a href="${esc(site)}" target="_blank" rel="noopener">Website</a>` : ''}${p.kind === 'venue' ? '<a href="#" data-addgroup>Add a group here</a>' : ''}</div>
     <h3 class="sec">What parents say</h3><div id="revBox"><p class="note">Loading…</p></div>
     <h3 class="sec">Rate it</h3>
     <form class="rate" id="rateForm">${METRICS.map(([k, label]) => `<div class="rrow"><span>${label}</span><span class="starbtns" data-k="${k}">${[1,2,3,4,5].map(n => `<button type="button" data-n="${n}" aria-label="${label}: ${n} of 5">★</button>`).join('')}</span></div>`).join('')}
@@ -313,6 +397,8 @@ async function openPlace(id) {
       <p class="note">Skip any you can't judge. ${shared() ? 'Reviews are shared with everyone.' : 'Reviews are saved on this device until sharing is switched on.'}</p>
       <button class="btn" type="submit">Save rating</button></form>`;
   $('#sheetWrap').hidden = false;
+  focusPlace(p);
+  $('#sheet [data-showmap]').addEventListener('click', e => { e.preventDefault(); closeSheet(); setSnap('peek'); setTimeout(() => focusPlace(p), 340); });
   const picks = {};
   $('#sheet').querySelectorAll('.starbtns').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; picks[g.dataset.k] = +b.dataset.n; g.querySelectorAll('button').forEach(x => x.classList.toggle('on', +x.dataset.n <= picks[g.dataset.k])); }));
   $('#rateForm').addEventListener('submit', async e => {
@@ -347,25 +433,82 @@ async function renderGroups() {
 
 /* ---------- actions ---------- */
 async function go(center, label) {
-  S.center = center; LS.set('hf-last', { center, label, radius: S.radius, walk: S.walk });
-  $('#status').textContent = 'Finding playgrounds, cafés and toilets around ' + (label || 'you') + '…'; $('#list').innerHTML = '';
-  try { const [els, ratings] = await Promise.all([fetchOSM(center), Store.allRatings().catch(() => ({}))]); S.ratings = ratings; S.places = build(els, center); renderList(); renderGroups(); }
+  S.center = center; S.shown = 100; S.fit = true; setSnap('half'); LS.set('hf-last', { center, label, radius: S.radius, walk: S.walk });
+  setStatus('Finding playgrounds, cafés and toilets around ' + (label || 'you') + (S.radius > 10000 ? '… a big radius can take up to a minute.' : '…')); $('#list').innerHTML = '';
+  try { const [els, ratings] = await Promise.all([fetchOSM(center), Store.allRatings().catch(e => { S.dbErr = e.message; return {}; })]); S.ratings = ratings; S.places = build(els, center); renderList(); scroller.scrollTop = 0; if (S.dbErr) { $('#status').insertAdjacentText('beforeend', ' · Ratings unavailable: ' + S.dbErr); S.dbErr = ''; } renderGroups(); }
   catch (e) { $('#status').textContent = e.message || 'Something went wrong loading places.'; }
 }
 async function geocode(q) {
-  const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
-  const j = await r.json(); if (!j.length) throw new Error('Couldn’t find “' + q + '”. Try a postcode.');
-  return { center: { lat: +j[0].lat, lon: +j[0].lon }, label: j[0].display_name.split(',').slice(0, 2).join(',') };
+  // UK postcodes → postcodes.io (fast, reliable); anything else → Photon, then Nominatim
+  const pc = q.replace(/\s+/g, '').toUpperCase();
+  if (/^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/.test(pc)) {
+    try { const r = await fetch('https://api.postcodes.io/postcodes/' + pc); if (r.ok) { const j = (await r.json()).result; return { center: { lat: j.latitude, lon: j.longitude }, label: j.postcode }; } } catch {}
+  }
+  const tries = [
+    async () => { const r = await fetch('https://photon.komoot.io/api/?limit=1&lat=52.5&lon=-1.5&q=' + encodeURIComponent(q)); if (!r.ok) throw 0; const f = (await r.json()).features?.[0]; if (!f) return null; const pr = f.properties; return { center: { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] }, label: [pr.name, pr.city || pr.county].filter(Boolean).join(', ') }; },
+    async () => { const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q)); if (!r.ok) throw 0; const j = await r.json(); return j[0] ? { center: { lat: +j[0].lat, lon: +j[0].lon }, label: j[0].display_name.split(',').slice(0, 2).join(',') } : null; }
+  ];
+  let down = 0;
+  for (const t of tries) { try { const g = await t(); if (g) return g; } catch { down++; } }
+  throw new Error(down === tries.length ? 'Couldn’t reach the place search. Check your signal, or tap Near me.' : `Couldn’t find “${q}”. Try a postcode.`);
 }
-function setTab(t) { document.body.dataset.tab = t; document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.t === t)); if (t !== 'groups' && map) setTimeout(() => map.invalidateSize(), 50); if (t === 'groups') renderGroups(); }
+function setTab(t) { document.body.dataset.tab = t; document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.t === t)); if (t === 'places') { setTimeout(() => { if (map) map.invalidateSize(); setSnap(S.snap, false); }, 30); } else { window.scrollTo(0, 0); renderGroups(); } }
 
-$('#searchForm').addEventListener('submit', async e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; try { const g = await geocode(q); go(g.center, g.label); } catch (err) { $('#status').textContent = err.message; } });
+/* ---------- phone list sheet: peek / half / full, like Airbnb ---------- */
+const pane = $('#listPane'), scroller = $('#listScroll'), mq = matchMedia('(max-width:899px)');
+S.snap = 'half';
+const snapY = n => { const H = pane.offsetHeight; return n === 'full' ? 0 : n === 'peek' ? Math.max(0, H - 78) : Math.round(H * 0.5); };
+const curY = () => { const m = /translateY\((-?[\d.]+)px/.exec(pane.style.transform); return m ? +m[1] : snapY(S.snap); };
+function setSnap(n, animate = true) {
+  if (!mq.matches) { pane.style.transform = ''; document.body.classList.remove('full'); return; }
+  S.snap = n; pane.classList.toggle('anim', animate);
+  pane.style.transform = `translateY(${snapY(n)}px)`;
+  document.body.classList.toggle('full', n === 'full');
+  if (n !== 'full') scroller.scrollTop = 0;
+}
+const coverBottom = () => mq.matches ? pane.offsetHeight - curY() : 0; // px of map hidden under the sheet
+{
+  let y0 = 0, t0 = 0, start = 0, drag = null, fromGrab = false, moved = 0;
+  pane.addEventListener('touchstart', e => {
+    if (!mq.matches || e.touches.length > 1) return;
+    y0 = e.touches[0].clientY; t0 = performance.now(); start = curY(); drag = null; moved = 0;
+    fromGrab = !!e.target.closest('#grab');
+  }, { passive: true });
+  pane.addEventListener('touchmove', e => {
+    if (!mq.matches || drag === false) return;
+    const dy = e.touches[0].clientY - y0; moved = dy;
+    if (drag === null) {
+      if (Math.abs(dy) < 6) return;
+      drag = fromGrab || S.snap !== 'full' || (scroller.scrollTop <= 0 && dy > 0);
+      if (!drag) return;
+      pane.classList.remove('anim');
+    }
+    e.preventDefault();
+    pane.style.transform = `translateY(${Math.min(snapY('peek'), Math.max(0, start + dy))}px)`;
+  }, { passive: false });
+  pane.addEventListener('touchend', () => {
+    if (!mq.matches) return;
+    if (!drag) { drag = null; return; }
+    const v = moved / Math.max(1, performance.now() - t0), aim = curY() + v * 180; // fling projects further
+    const opts = ['full', 'half', 'peek'];
+    setSnap(opts.reduce((a, b) => Math.abs(snapY(b) - aim) < Math.abs(snapY(a) - aim) ? b : a));
+    drag = null;
+  });
+  $('#grab').addEventListener('click', () => { if (mq.matches && Math.abs(moved) < 6) setSnap(S.snap === 'peek' ? 'half' : S.snap === 'half' ? 'full' : 'half'); });
+  $('#mapBtn').addEventListener('click', () => setSnap('peek'));
+  addEventListener('resize', () => setSnap(S.snap, false));
+  mq.addEventListener('change', () => { setSnap(S.snap, false); if (map) map.invalidateSize(); });
+  $('#optBtn').addEventListener('click', e => { const on = $('.top').classList.toggle('showopts'); e.currentTarget.setAttribute('aria-expanded', on); setTimeout(() => { if (map) map.invalidateSize(); setSnap(S.snap, false); }, 30); });
+}
+
+$('#searchForm').addEventListener('submit', async e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; setStatus('Looking up ' + q + '…'); try { const g = await geocode(q); go(g.center, g.label); } catch (err) { $('#status').textContent = err.message; } });
 $('#locate').addEventListener('click', () => { if (!navigator.geolocation) { $('#status').textContent = 'Location isn’t available here — search instead.'; return; } $('#status').textContent = 'Finding you…'; navigator.geolocation.getCurrentPosition(p => go({ lat: p.coords.latitude, lon: p.coords.longitude }, 'you'), () => { $('#status').textContent = 'Location was blocked — search a town or postcode instead.'; }, { timeout: 10000 }); });
 $('#radius').addEventListener('change', e => { S.radius = +e.target.value; if (S.center) go(S.center); });
+$('#sort').addEventListener('change', e => { S.sort = e.target.value; S.shown = 100; renderList(); });
 $('#walk').addEventListener('change', e => { S.walk = +e.target.value; if (S.center) go(S.center); });
-$('#filters').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; S.filter = b.dataset.f; document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b)); renderList(); });
+$('#filters').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; S.filter = b.dataset.f; S.shown = 100; S.fit = true; document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === b)); renderList(); });
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.t)));
-$('#list').addEventListener('click', e => { const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
+$('#list').addEventListener('click', e => { if (e.target.closest('[data-more]')) { S.shown += 100; renderList(); return; } const b = e.target.closest('.card'); if (b) openPlace(b.dataset.id); });
 $('#sheetWrap').addEventListener('click', e => { if (e.target.id === 'sheetWrap' || e.target.closest('[data-close]')) closeSheet(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 $('#groupForm').addEventListener('submit', async e => {
@@ -376,8 +519,9 @@ $('#groupForm').addEventListener('submit', async e => {
 });
 
 initMap();
+setSnap('half', false);
 const last = LS.get('hf-last', null);
-if (last?.center) { S.radius = last.radius || 2000; S.walk = last.walk || 8; $('#radius').value = S.radius; $('#walk').value = S.walk; $('#q').value = last.label && last.label !== 'you' ? last.label : ''; go(last.center, last.label); }
+if (last?.center) { S.radius = last.radius || 15000; S.walk = last.walk || 8; $('#radius').value = S.radius; $('#walk').value = S.walk; $('#q').value = last.label && last.label !== 'you' ? last.label : ''; go(last.center, last.label); }
 else { renderList(); renderGroups(); }
 }
 </script>
